@@ -1,6 +1,8 @@
 import {useMemo, useState} from "react";
+import * as ImagePicker from "expo-image-picker";
 import {
   ActivityIndicator,
+  Image,
   Linking,
   Pressable,
   SafeAreaView,
@@ -14,7 +16,6 @@ import {
 import {api, Evaluation, Look, Option, Wallet} from "./src/api";
 
 type Step = "onboarding" | "wallet" | "look" | "options" | "decision" | "confirmed";
-
 const money = (value: number) => `${value.toFixed(2).replace(".", ",")} €`;
 
 export default function App() {
@@ -27,9 +28,9 @@ export default function App() {
   const [options, setOptions] = useState<Option[]>([]);
   const [selected, setSelected] = useState<Option | null>(null);
   const [evaluation, setEvaluation] = useState<Evaluation | null>(null);
+  const [imageUri, setImageUri] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-
   const ownedCount = useMemo(() => look?.pieces.filter((piece) => piece.is_owned).length ?? 0, [look]);
 
   async function run<T>(fn: () => Promise<T>): Promise<T | null> {
@@ -52,14 +53,36 @@ export default function App() {
       return;
     }
     const nextWallet = await run(() => api.setBudget(baseUrl, amount));
-    if (!nextWallet) return;
-    setWallet(nextWallet);
-    setStep("wallet");
+    if (nextWallet) {
+      setWallet(nextWallet);
+      setStep("wallet");
+    }
+  }
+
+  async function pickImage() {
+    setError(null);
+    const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
+    if (!permission.granted) {
+      setError("Autorise l’accès aux photos pour importer une capture de look.");
+      return;
+    }
+    const result = await ImagePicker.launchImageLibraryAsync({
+      mediaTypes: ["images"],
+      allowsMultipleSelection: false,
+      quality: 0.85,
+    });
+    if (!result.canceled && result.assets[0]) {
+      setImageUri(result.assets[0].uri);
+    }
   }
 
   async function capture() {
+    if (!imageUri) {
+      setError("Choisis d’abord une capture depuis ta galerie.");
+      return;
+    }
     const result = await run(async () => {
-      const created = await api.createCapture(baseUrl);
+      const created = await api.createCapture(baseUrl, imageUri);
       const nextLook = await api.look(baseUrl, created.look_id);
       const gaps = await api.gaps(baseUrl, created.look_id);
       return {nextLook, gaps};
@@ -91,49 +114,35 @@ export default function App() {
   async function act(action: string) {
     if (!selected) return;
     const result = await run(() => api.takeAction(baseUrl, selected.id, action));
-    if (!result) return;
-    if (action === "buy" && selected.affiliate_url) {
+    if (result && action === "buy" && selected.affiliate_url) {
       await Linking.openURL(selected.affiliate_url).catch(() => undefined);
     }
   }
 
   async function confirm() {
     if (!selected) return;
-    const key = `mobile-${selected.id}-${Date.now()}`;
-    const result = await run(() => api.confirmPurchase(baseUrl, selected.id, key));
+    const result = await run(() => api.confirmPurchase(baseUrl, selected.id, `mobile-${selected.id}-${Date.now()}`));
     if (!result) return;
     setWallet(result.wallet);
+    setImageUri(null);
     setStep("confirmed");
   }
 
   return (
     <SafeAreaView style={styles.safe}>
       <ScrollView contentContainerStyle={styles.page} keyboardShouldPersistTaps="handled">
-        <View style={styles.brandRow}>
+        <View>
           <Text style={styles.brand}>FASHION MONEY</Text>
-          <Text style={styles.kicker}>budget-first · capture-first</Text>
+          <Text style={styles.muted}>budget-first · capture-first</Text>
         </View>
 
         {step === "onboarding" && (
           <Card>
             <Text style={styles.eyebrow}>01 · TON ENVELOPPE</Text>
-            <Text style={styles.title}>Combien veux-tu consacrer aux vêtements ce mois-ci ?</Text>
-            <Text style={styles.copy}>Le budget est la seule donnée obligatoire. La penderie peut rester vide à J0.</Text>
-            <TextInput
-              accessibilityLabel="Budget mensuel"
-              keyboardType="decimal-pad"
-              value={budgetInput}
-              onChangeText={setBudgetInput}
-              style={styles.moneyInput}
-            />
+            <Text style={styles.title}>Ton budget vêtements ce mois-ci ?</Text>
+            <TextInput value={budgetInput} onChangeText={setBudgetInput} keyboardType="decimal-pad" style={styles.moneyInput} />
             <Text style={styles.label}>API backend</Text>
-            <TextInput
-              autoCapitalize="none"
-              autoCorrect={false}
-              value={baseUrl}
-              onChangeText={setBaseUrl}
-              style={styles.input}
-            />
+            <TextInput value={baseUrl} onChangeText={setBaseUrl} autoCapitalize="none" style={styles.input} />
             <PrimaryButton label="Créer mon enveloppe" onPress={start} />
           </Card>
         )}
@@ -142,10 +151,12 @@ export default function App() {
           <>
             <WalletCard wallet={wallet} />
             <Card>
-              <Text style={styles.eyebrow}>02 · INSPIRATION</Text>
-              <Text style={styles.title}>Un look t’a tapé dans l’œil ?</Text>
-              <Text style={styles.copy}>Pour ce slice, la capture est mockée côté backend. Le flux produit est réel.</Text>
-              <PrimaryButton label="Analyser une capture" onPress={capture} />
+              <Text style={styles.eyebrow}>02 · IMPORTER TON INSPIRATION</Text>
+              <Text style={styles.title}>Choisis une vraie capture depuis ta galerie.</Text>
+              <Text style={styles.copy}>La photo vient maintenant de ton téléphone. L’analyse Vision reste mockée pour isoler l’UX d’import.</Text>
+              {imageUri ? <Image source={{uri: imageUri}} style={styles.preview} /> : <View style={styles.placeholder}><Text style={styles.muted}>Aucune image sélectionnée</Text></View>}
+              <SecondaryButton label={imageUri ? "Changer d’image" : "Choisir dans la galerie"} onPress={pickImage} />
+              <PrimaryButton label="Analyser ce look" onPress={capture} disabled={!imageUri} />
             </Card>
           </>
         )}
@@ -153,26 +164,12 @@ export default function App() {
         {step === "look" && look && (
           <Card>
             <Text style={styles.eyebrow}>03 · CE QUE TU AS DÉJÀ</Text>
+            {imageUri && <Image source={{uri: imageUri}} style={styles.thumb} />}
             <Text style={styles.bigNumber}>{look.score_look}%</Text>
             <Text style={styles.title}>{look.style ?? "Style détecté"}</Text>
-            <Text style={styles.copy}>
-              {ownedCount === 0
-                ? "Penderie vide : on raisonne d’abord budget."
-                : `${ownedCount} pièce(s) sur ${look.pieces.length} déjà couvertes.`}
-            </Text>
-            {look.pieces.map((piece) => (
-              <View key={piece.id} style={styles.row}>
-                <Text style={styles.rowTitle}>{piece.category}</Text>
-                <Text style={piece.is_owned ? styles.good : styles.muted}>
-                  {piece.is_owned ? "déjà possédé" : "manquant"}
-                </Text>
-              </View>
-            ))}
-            <PrimaryButton
-              label={missing.length ? `Voir ${missing.length} pièce(s) à compléter` : "Tout est déjà couvert"}
-              onPress={loadOptions}
-              disabled={!missing.length}
-            />
+            <Text style={styles.copy}>{ownedCount === 0 ? "Penderie vide : on raisonne d’abord budget." : `${ownedCount} pièce(s) sur ${look.pieces.length} déjà couvertes.`}</Text>
+            {look.pieces.map((piece) => <View key={piece.id} style={styles.row}><Text style={styles.rowTitle}>{piece.category}</Text><Text style={piece.is_owned ? styles.good : styles.muted}>{piece.is_owned ? "déjà possédé" : "manquant"}</Text></View>)}
+            <PrimaryButton label={missing.length ? `Voir ${missing.length} pièce(s) à compléter` : "Tout est couvert"} onPress={loadOptions} disabled={!missing.length} />
           </Card>
         )}
 
@@ -180,19 +177,7 @@ export default function App() {
           <Card>
             <Text style={styles.eyebrow}>04 · OPTIONS</Text>
             <Text style={styles.title}>Trois choix. Pas quarante-huit.</Text>
-            <Text style={styles.copy}>Le meilleur choix est classé par PurchaseScore côté backend.</Text>
-            {options.map((option) => (
-              <Pressable key={option.id} style={[styles.option, option.is_best && styles.optionBest]} onPress={() => decide(option)}>
-                <View>
-                  <Text style={styles.rowTitle}>{option.merchant ?? "Marchand"}</Text>
-                  <Text style={styles.muted}>Similarité {option.similarity ?? "—"}%</Text>
-                </View>
-                <View style={styles.right}>
-                  <Text style={styles.optionPrice}>{money(option.price)}</Text>
-                  {option.is_best && <Text style={styles.best}>MEILLEUR CHOIX</Text>}
-                </View>
-              </Pressable>
-            ))}
+            {options.map((option) => <Pressable key={option.id} style={[styles.option, option.is_best && styles.optionBest]} onPress={() => decide(option)}><View><Text style={styles.rowTitle}>{option.merchant ?? "Marchand"}</Text><Text style={styles.muted}>Similarité {option.similarity ?? "—"}%</Text></View><View style={styles.right}><Text style={styles.optionPrice}>{money(option.price)}</Text>{option.is_best && <Text style={styles.best}>MEILLEUR CHOIX</Text>}</View></Pressable>)}
           </Card>
         )}
 
@@ -202,39 +187,15 @@ export default function App() {
             <Card>
               <Text style={styles.eyebrow}>05 · DÉCISION</Text>
               <Text style={styles.title}>Ton solde après achat</Text>
-              <View style={styles.balanceFlow}>
-                <Text style={styles.balanceBefore}>{money(evaluation.available)}</Text>
-                <Text style={styles.arrow}>→</Text>
-                <Text style={styles.balanceAfter}>{money(evaluation.available_after)}</Text>
-              </View>
+              <View style={styles.balanceFlow}><Text style={styles.balance}>{money(evaluation.available)}</Text><Text>→</Text><Text style={styles.balance}>{money(evaluation.available_after)}</Text></View>
               <Verdict verdict={evaluation.verdict} />
-              <Text style={styles.copy}>Prix de la pièce : {money(evaluation.price)}. Le solde est montré avant que tu décides.</Text>
-              {evaluation.verdict !== "over" ? (
-                <>
-                  <PrimaryButton label={`Continuer vers l'achat · ${money(selected.price)}`} onPress={() => act("buy")} />
-                  <SecondaryButton label="J'ai acheté cette pièce" onPress={confirm} />
-                </>
-              ) : (
-                <>
-                  <PrimaryButton label="Étaler sur 2 mois" onPress={() => act("phase")} />
-                  <SecondaryButton label="Trouver une substitution" onPress={() => act("substitute")} />
-                  <SecondaryButton label="Attendre" onPress={() => act("wait")} />
-                </>
-              )}
+              {evaluation.verdict !== "over" ? <><PrimaryButton label={`Continuer vers l’achat · ${money(selected.price)}`} onPress={() => act("buy")} /><SecondaryButton label="J’ai acheté cette pièce" onPress={confirm} /></> : <><PrimaryButton label="Étaler sur 2 mois" onPress={() => act("phase")} /><SecondaryButton label="Trouver une substitution" onPress={() => act("substitute")} /><SecondaryButton label="Attendre" onPress={() => act("wait")} /></>}
             </Card>
           </>
         )}
 
         {step === "confirmed" && wallet && (
-          <>
-            <WalletCard wallet={wallet} />
-            <Card>
-              <Text style={styles.eyebrow}>06 · BOUCLE REFERMÉE</Text>
-              <Text style={styles.title}>Budget débité. Penderie enrichie.</Text>
-              <Text style={styles.copy}>Ta prochaine capture saura déjà que cette pièce existe. Le produit commence à composer sa valeur dans le temps.</Text>
-              <PrimaryButton label="Faire une nouvelle capture" onPress={capture} />
-            </Card>
-          </>
+          <><WalletCard wallet={wallet} /><Card><Text style={styles.eyebrow}>06 · BOUCLE REFERMÉE</Text><Text style={styles.title}>Budget débité. Penderie enrichie.</Text><Text style={styles.copy}>Choisis maintenant une autre inspiration : la prochaine analyse partira d’une garde-robe déjà enrichie.</Text><PrimaryButton label="Importer une nouvelle capture" onPress={() => setStep("wallet")} /></Card></>
         )}
 
         {busy && <ActivityIndicator size="large" />}
@@ -244,80 +205,21 @@ export default function App() {
   );
 }
 
-function Card({children}: {children: React.ReactNode}) {
-  return <View style={styles.card}>{children}</View>;
-}
-
-function WalletCard({wallet}: {wallet: Wallet}) {
-  return (
-    <Card>
-      <Text style={styles.eyebrow}>WALLET · {wallet.period || "MOIS EN COURS"}</Text>
-      <Text style={styles.walletAmount}>{money(wallet.available)}</Text>
-      <Text style={styles.muted}>restants sur {money(wallet.base)} · dépensé {money(wallet.spent)}</Text>
-      <View style={styles.track}>
-        <View style={[styles.fill, {width: `${Math.max(0, Math.min(100, wallet.base ? (wallet.available / wallet.base) * 100 : 0))}%`}]} />
-      </View>
-    </Card>
-  );
-}
-
-function Verdict({verdict}: {verdict: Evaluation["verdict"]}) {
-  const label = verdict === "fits" ? "ÇA PASSE" : verdict === "tight" ? "JUSTE, MAIS ÇA PASSE" : "ÇA DÉBORDE";
-  return <Text style={[styles.verdict, verdict === "over" && styles.verdictOver]}>{label}</Text>;
-}
-
-function PrimaryButton({label, onPress, disabled = false}: {label: string; onPress: () => void; disabled?: boolean}) {
-  return (
-    <Pressable disabled={disabled} onPress={onPress} style={[styles.primary, disabled && styles.disabled]}>
-      <Text style={styles.primaryText}>{label}</Text>
-    </Pressable>
-  );
-}
-
-function SecondaryButton({label, onPress}: {label: string; onPress: () => void}) {
-  return (
-    <Pressable onPress={onPress} style={styles.secondary}>
-      <Text style={styles.secondaryText}>{label}</Text>
-    </Pressable>
-  );
-}
+function Card({children}: {children: React.ReactNode}) { return <View style={styles.card}>{children}</View>; }
+function WalletCard({wallet}: {wallet: Wallet}) { return <Card><Text style={styles.eyebrow}>WALLET · {wallet.period || "MOIS EN COURS"}</Text><Text style={styles.walletAmount}>{money(wallet.available)}</Text><Text style={styles.muted}>restants sur {money(wallet.base)} · dépensé {money(wallet.spent)}</Text></Card>; }
+function Verdict({verdict}: {verdict: Evaluation["verdict"]}) { return <Text style={[styles.verdict, verdict === "over" && styles.verdictOver]}>{verdict === "fits" ? "ÇA PASSE" : verdict === "tight" ? "JUSTE, MAIS ÇA PASSE" : "ÇA DÉBORDE"}</Text>; }
+function PrimaryButton({label, onPress, disabled = false}: {label: string; onPress: () => void; disabled?: boolean}) { return <Pressable disabled={disabled} onPress={onPress} style={[styles.primary, disabled && styles.disabled]}><Text style={styles.primaryText}>{label}</Text></Pressable>; }
+function SecondaryButton({label, onPress}: {label: string; onPress: () => void}) { return <Pressable onPress={onPress} style={styles.secondary}><Text style={styles.secondaryText}>{label}</Text></Pressable>; }
 
 const styles = StyleSheet.create({
-  safe: {flex: 1, backgroundColor: "#F3F1EB"},
-  page: {padding: 20, gap: 16, paddingBottom: 48},
-  brandRow: {paddingTop: 8, paddingBottom: 4},
-  brand: {fontSize: 22, fontWeight: "900", letterSpacing: 1.4, color: "#161616"},
-  kicker: {fontSize: 12, color: "#6E6A63", marginTop: 4},
-  card: {backgroundColor: "#FFFFFF", borderRadius: 24, padding: 20, gap: 14, borderWidth: 1, borderColor: "#E7E3DB"},
-  eyebrow: {fontSize: 11, fontWeight: "800", letterSpacing: 1.3, color: "#7A746B"},
-  title: {fontSize: 26, lineHeight: 31, fontWeight: "800", color: "#171717"},
-  copy: {fontSize: 15, lineHeight: 22, color: "#5F5A53"},
-  label: {fontSize: 12, fontWeight: "700", color: "#777168", marginTop: 4},
-  input: {borderWidth: 1, borderColor: "#D8D2C8", borderRadius: 14, padding: 14, color: "#171717"},
-  moneyInput: {fontSize: 48, fontWeight: "800", color: "#171717", borderBottomWidth: 1, borderColor: "#D8D2C8", paddingVertical: 8},
-  primary: {backgroundColor: "#171717", borderRadius: 16, paddingVertical: 16, paddingHorizontal: 18, alignItems: "center", marginTop: 4},
-  primaryText: {color: "#FFFFFF", fontSize: 15, fontWeight: "800"},
-  secondary: {borderWidth: 1, borderColor: "#BBB4A9", borderRadius: 16, paddingVertical: 15, paddingHorizontal: 18, alignItems: "center"},
-  secondaryText: {color: "#171717", fontSize: 15, fontWeight: "700"},
-  disabled: {opacity: 0.4},
-  error: {backgroundColor: "#FFE4E0", color: "#8A241C", padding: 14, borderRadius: 14},
-  walletAmount: {fontSize: 46, fontWeight: "900", color: "#171717", fontVariant: ["tabular-nums"]},
-  bigNumber: {fontSize: 56, fontWeight: "900", color: "#171717", fontVariant: ["tabular-nums"]},
-  muted: {fontSize: 13, color: "#7B756D"},
-  good: {fontSize: 13, color: "#2F6B47", fontWeight: "700"},
-  track: {height: 8, backgroundColor: "#ECE8E0", borderRadius: 99, overflow: "hidden"},
-  fill: {height: 8, backgroundColor: "#171717", borderRadius: 99},
-  row: {flexDirection: "row", justifyContent: "space-between", gap: 12, paddingVertical: 10, borderBottomWidth: StyleSheet.hairlineWidth, borderColor: "#DED9D0"},
-  rowTitle: {fontSize: 15, fontWeight: "700", color: "#171717", textTransform: "capitalize"},
-  option: {flexDirection: "row", justifyContent: "space-between", alignItems: "center", padding: 16, borderWidth: 1, borderColor: "#DED9D0", borderRadius: 16},
-  optionBest: {borderWidth: 2, borderColor: "#171717"},
-  right: {alignItems: "flex-end"},
-  optionPrice: {fontSize: 21, fontWeight: "800", fontVariant: ["tabular-nums"]},
-  best: {fontSize: 9, fontWeight: "900", letterSpacing: 0.8, marginTop: 3},
-  balanceFlow: {flexDirection: "row", alignItems: "center", justifyContent: "space-between"},
-  balanceBefore: {fontSize: 28, fontWeight: "700", color: "#817B73", fontVariant: ["tabular-nums"]},
-  arrow: {fontSize: 24, color: "#9A948C"},
-  balanceAfter: {fontSize: 36, fontWeight: "900", color: "#171717", fontVariant: ["tabular-nums"]},
-  verdict: {alignSelf: "flex-start", paddingHorizontal: 12, paddingVertical: 7, borderRadius: 999, backgroundColor: "#DDEFE3", color: "#205B36", fontSize: 11, fontWeight: "900", letterSpacing: 0.7},
-  verdictOver: {backgroundColor: "#FFE3DE", color: "#8A241C"},
+  safe: {flex: 1, backgroundColor: "#F3F1EB"}, page: {padding: 20, gap: 16, paddingBottom: 48},
+  brand: {fontSize: 22, fontWeight: "900", letterSpacing: 1.4}, card: {backgroundColor: "white", borderRadius: 24, padding: 20, gap: 14, borderWidth: 1, borderColor: "#E7E3DB"},
+  eyebrow: {fontSize: 11, fontWeight: "800", letterSpacing: 1.3, color: "#7A746B"}, title: {fontSize: 26, lineHeight: 31, fontWeight: "800"}, copy: {fontSize: 15, lineHeight: 22, color: "#5F5A53"},
+  label: {fontSize: 12, fontWeight: "700", color: "#777168"}, input: {borderWidth: 1, borderColor: "#D8D2C8", borderRadius: 14, padding: 14}, moneyInput: {fontSize: 48, fontWeight: "800", borderBottomWidth: 1, borderColor: "#D8D2C8"},
+  primary: {backgroundColor: "#171717", borderRadius: 16, padding: 16, alignItems: "center"}, primaryText: {color: "white", fontWeight: "800"}, secondary: {borderWidth: 1, borderColor: "#BBB4A9", borderRadius: 16, padding: 15, alignItems: "center"}, secondaryText: {fontWeight: "700"}, disabled: {opacity: 0.4},
+  preview: {width: "100%", aspectRatio: 0.8, borderRadius: 18, backgroundColor: "#E9E5DD"}, thumb: {width: "100%", height: 180, borderRadius: 16, backgroundColor: "#E9E5DD"}, placeholder: {height: 180, borderRadius: 18, backgroundColor: "#ECE8E0", alignItems: "center", justifyContent: "center"},
+  walletAmount: {fontSize: 46, fontWeight: "900", fontVariant: ["tabular-nums"]}, bigNumber: {fontSize: 56, fontWeight: "900"}, muted: {fontSize: 13, color: "#7B756D"}, good: {fontSize: 13, color: "#2F6B47", fontWeight: "700"},
+  row: {flexDirection: "row", justifyContent: "space-between", paddingVertical: 10, borderBottomWidth: StyleSheet.hairlineWidth, borderColor: "#DED9D0"}, rowTitle: {fontSize: 15, fontWeight: "700", textTransform: "capitalize"},
+  option: {flexDirection: "row", justifyContent: "space-between", alignItems: "center", padding: 16, borderWidth: 1, borderColor: "#DED9D0", borderRadius: 16}, optionBest: {borderWidth: 2, borderColor: "#171717"}, right: {alignItems: "flex-end"}, optionPrice: {fontSize: 21, fontWeight: "800"}, best: {fontSize: 9, fontWeight: "900"},
+  balanceFlow: {flexDirection: "row", alignItems: "center", justifyContent: "space-between"}, balance: {fontSize: 28, fontWeight: "900", fontVariant: ["tabular-nums"]}, verdict: {fontSize: 13, fontWeight: "900", paddingVertical: 8}, verdictOver: {color: "#A13A2F"}, error: {backgroundColor: "#FFE4E0", color: "#8A241C", padding: 14, borderRadius: 14},
 });
