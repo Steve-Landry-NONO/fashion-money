@@ -24,7 +24,7 @@ class FileSystemImageStorage:
         path = Path(image_ref)
         data = path.read_bytes()
         content_type = mimetypes.guess_type(path.name)[0] or "image/jpeg"
-        return StoredImage(data=data, content_type=content_type)
+        return StoredImage(key=image_ref, content_type=content_type, data=data)
 
 
 def discover_images(root: Path) -> list[Path]:
