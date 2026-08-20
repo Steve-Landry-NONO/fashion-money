@@ -49,21 +49,42 @@ export type Evaluation = {
   issues: Array<Record<string, unknown>>;
 };
 
-const headers = {
-  Authorization: "Bearer dev-token",
-  "Content-Type": "application/json",
-};
+const authHeader = {Authorization: "Bearer dev-token"};
+const jsonHeaders = {...authHeader, "Content-Type": "application/json"};
 
 async function request<T>(baseUrl: string, path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(`${baseUrl.replace(/\/$/, "")}${path}`, {
     ...init,
-    headers: {...headers, ...(init?.headers ?? {})},
+    headers: {...jsonHeaders, ...(init?.headers ?? {})},
   });
   if (!response.ok) {
     const body = await response.text();
     throw new Error(`${response.status} ${body || response.statusText}`);
   }
   return (await response.json()) as T;
+}
+
+function imageMeta(uri: string): {name: string; type: string} {
+  const clean = uri.split("?")[0].toLowerCase();
+  if (clean.endsWith(".png")) return {name: "look.png", type: "image/png"};
+  if (clean.endsWith(".webp")) return {name: "look.webp", type: "image/webp"};
+  return {name: "look.jpg", type: "image/jpeg"};
+}
+
+async function uploadCapture(baseUrl: string, imageUri: string): Promise<Capture> {
+  const meta = imageMeta(imageUri);
+  const form = new FormData();
+  form.append("file", {uri: imageUri, name: meta.name, type: meta.type} as unknown as Blob);
+  const response = await fetch(`${baseUrl.replace(/\/$/, "")}/captures/upload`, {
+    method: "POST",
+    headers: authHeader,
+    body: form,
+  });
+  if (!response.ok) {
+    const body = await response.text();
+    throw new Error(`${response.status} ${body || response.statusText}`);
+  }
+  return (await response.json()) as Capture;
 }
 
 export const api = {
@@ -73,11 +94,7 @@ export const api = {
       body: JSON.stringify({base_amount: baseAmount}),
     }),
   wallet: (baseUrl: string) => request<Wallet>(baseUrl, "/wallet"),
-  createCapture: (baseUrl: string, imageRef?: string | null) =>
-    request<Capture>(baseUrl, "/captures", {
-      method: "POST",
-      body: JSON.stringify({image_ref: imageRef ?? null}),
-    }),
+  createCapture: uploadCapture,
   look: (baseUrl: string, lookId: string) => request<Look>(baseUrl, `/looks/${lookId}`),
   gaps: (baseUrl: string, lookId: string) => request<{missing: string[]}>(baseUrl, `/looks/${lookId}/gaps`),
   options: (baseUrl: string, pieceId: string) =>
