@@ -73,8 +73,11 @@ export const api = {
       body: JSON.stringify({base_amount: baseAmount}),
     }),
   wallet: (baseUrl: string) => request<Wallet>(baseUrl, "/wallet"),
-  createCapture: (baseUrl: string) =>
-    request<Capture>(baseUrl, "/captures", {method: "POST", body: JSON.stringify({})}),
+  createCapture: (baseUrl: string, imageRef?: string | null) =>
+    request<Capture>(baseUrl, "/captures", {
+      method: "POST",
+      body: JSON.stringify({image_ref: imageRef ?? null}),
+    }),
   look: (baseUrl: string, lookId: string) => request<Look>(baseUrl, `/looks/${lookId}`),
   gaps: (baseUrl: string, lookId: string) => request<{missing: string[]}>(baseUrl, `/looks/${lookId}/gaps`),
   options: (baseUrl: string, pieceId: string) =>
