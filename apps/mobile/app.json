@@ -5,6 +5,16 @@
     "version": "0.1.0",
     "orientation": "portrait",
     "userInterfaceStyle": "light",
+    "plugins": [
+      [
+        "expo-image-picker",
+        {
+          "photosPermission": "Fashion Money accède à tes photos pour analyser les looks que tu choisis.",
+          "cameraPermission": false,
+          "microphonePermission": false
+        }
+      ]
+    ],
     "ios": {"supportsTablet": true},
     "android": {"package": "com.fashionmoney.app"}
   }
