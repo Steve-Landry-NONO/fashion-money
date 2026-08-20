@@ -1,6 +1,6 @@
 import base64
 from dataclasses import dataclass
-from typing import Protocol
+from typing import Any, Protocol
 
 from openai import OpenAI
 from pydantic import BaseModel, Field
@@ -71,24 +71,25 @@ class OpenAIDecompositionProvider:
         image = self.storage.get(image_ref)
         encoded = base64.b64encode(image.data).decode("ascii")
         data_url = f"data:{image.content_type};base64,{encoded}"
+        input_payload: list[Any] = [
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "input_text",
+                        "text": (
+                            "Analyze this fashion inspiration image. Return only visible wearable pieces "
+                            "that materially define the outfit. Use generic categories rather than brands. "
+                            "Describe the overall style briefly. Infer material/cut only when visually plausible."
+                        ),
+                    },
+                    {"type": "input_image", "image_url": data_url},
+                ],
+            }
+        ]
         response = self.client.responses.parse(
             model=settings.vision_model,
-            input=[
-                {
-                    "role": "user",
-                    "content": [
-                        {
-                            "type": "input_text",
-                            "text": (
-                                "Analyze this fashion inspiration image. Return only visible wearable pieces "
-                                "that materially define the outfit. Use generic categories rather than brands. "
-                                "Describe the overall style briefly. Infer material/cut only when visually plausible."
-                            ),
-                        },
-                        {"type": "input_image", "image_url": data_url},
-                    ],
-                }
-            ],
+            input=input_payload,
             text_format=VisionLook,
         )
         parsed = response.output_parsed
