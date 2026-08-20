@@ -65,7 +65,7 @@ async function request<T>(baseUrl: string, path: string, init?: RequestInit): Pr
 }
 
 function imageMeta(uri: string): {name: string; type: string} {
-  const clean = uri.split("?")[0].toLowerCase();
+  const clean = (uri.split("?")[0] ?? uri).toLowerCase();
   if (clean.endsWith(".png")) return {name: "look.png", type: "image/png"};
   if (clean.endsWith(".webp")) return {name: "look.webp", type: "image/webp"};
   return {name: "look.jpg", type: "image/jpeg"};
