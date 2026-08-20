@@ -1,0 +1,11 @@
+{
+  "expo": {
+    "name": "Fashion Money",
+    "slug": "fashion-money",
+    "version": "0.1.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "light",
+    "ios": {"supportsTablet": true},
+    "android": {"package": "com.fashionmoney.app"}
+  }
+}
