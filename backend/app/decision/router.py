@@ -21,7 +21,11 @@ router = APIRouter(tags=["decision"])
 
 
 @router.post("/decisions/evaluate", response_model=EvaluationOut)
-def evaluate(body: EvaluateIn, user: User = Depends(get_current_user), session: Session = Depends(get_session)) -> EvaluationOut:
+def evaluate(
+    body: EvaluateIn,
+    user: User = Depends(get_current_user),
+    session: Session = Depends(get_session),
+) -> EvaluationOut:
     option = session.get(Option, body.option_id)
     if option is None:
         raise HTTPException(status_code=404, detail="option not found")
@@ -31,7 +35,11 @@ def evaluate(body: EvaluateIn, user: User = Depends(get_current_user), session: 
 
 
 @router.post("/decisions/actions", response_model=DecisionActionOut, status_code=201)
-def take_action(body: DecisionActionIn, user: User = Depends(get_current_user), session: Session = Depends(get_session)) -> DecisionActionOut:
+def take_action(
+    body: DecisionActionIn,
+    user: User = Depends(get_current_user),
+    session: Session = Depends(get_session),
+) -> DecisionActionOut:
     option = session.get(Option, body.option_id)
     if option is None:
         raise HTTPException(status_code=404, detail="option not found")
@@ -43,7 +51,11 @@ def take_action(body: DecisionActionIn, user: User = Depends(get_current_user), 
 
 
 @router.post("/purchases/confirm", response_model=PurchaseOut)
-def confirm_purchase(body: PurchaseConfirmIn, user: User = Depends(get_current_user), session: Session = Depends(get_session)) -> PurchaseOut:
+def confirm_purchase(
+    body: PurchaseConfirmIn,
+    user: User = Depends(get_current_user),
+    session: Session = Depends(get_session),
+) -> PurchaseOut:
     option = session.get(Option, body.option_id)
     if option is None:
         raise HTTPException(status_code=404, detail="option not found")

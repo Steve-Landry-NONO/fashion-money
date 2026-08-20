@@ -13,7 +13,11 @@ router = APIRouter(tags=["wardrobe"])
 
 
 @router.post("/wardrobe/items", response_model=WardrobeItemOut, status_code=201)
-def add_item(body: WardrobeItemIn, user: User = Depends(get_current_user), session: Session = Depends(get_session)) -> WardrobeItemOut:
+def add_item(
+    body: WardrobeItemIn,
+    user: User = Depends(get_current_user),
+    session: Session = Depends(get_session),
+) -> WardrobeItemOut:
     item = WardrobeItem(user_id=user.id, **body.model_dump())
     session.add(item)
     session.commit()
@@ -22,7 +26,10 @@ def add_item(body: WardrobeItemIn, user: User = Depends(get_current_user), sessi
 
 
 @router.get("/wardrobe", response_model=list[WardrobeItemOut])
-def get_wardrobe(user: User = Depends(get_current_user), session: Session = Depends(get_session)) -> list[WardrobeItemOut]:
+def get_wardrobe(
+    user: User = Depends(get_current_user),
+    session: Session = Depends(get_session),
+) -> list[WardrobeItemOut]:
     rows = list(session.scalars(select(WardrobeItem).where(WardrobeItem.user_id == user.id)).all())
     return [WardrobeItemOut(
         id=r.id, category=r.category, color=r.color, cut=r.cut, material=r.material,

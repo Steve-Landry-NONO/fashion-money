@@ -59,7 +59,12 @@ def record_action(session: Session, user_id: str, option: Option, action: str) -
     if action == "phase":
         emitter.emit(emitter.PLAN_CREATED, user_id, months_count=2, month1_total=None)
     if action == "substitute":
-        emitter.emit(emitter.SUBSTITUTION_SELECTED, user_id, bundle_price=92.0, delta_vs_original=round(ev.price - 92.0, 2))
+        emitter.emit(
+            emitter.SUBSTITUTION_SELECTED,
+            user_id,
+            bundle_price=92.0,
+            delta_vs_original=round(ev.price - 92.0, 2),
+        )
     return decision, row
 
 
@@ -67,11 +72,21 @@ def confirm_purchase(
     session: Session, user_id: str, option: Option, idempotency_key: str,
     *, fail_after_spend_for_test: bool = False,
 ) -> Purchase:
-    existing = session.scalar(select(Purchase).where(Purchase.user_id == user_id, Purchase.idempotency_key == idempotency_key))
+    existing = session.scalar(
+        select(Purchase).where(
+            Purchase.user_id == user_id,
+            Purchase.idempotency_key == idempotency_key,
+        )
+    )
     if existing is not None:
         return existing
 
-    purchase = Purchase(user_id=user_id, option_id=option.id, price=float(option.price), idempotency_key=idempotency_key)
+    purchase = Purchase(
+        user_id=user_id,
+        option_id=option.id,
+        price=float(option.price),
+        idempotency_key=idempotency_key,
+    )
     session.add(purchase)
     session.flush()
 

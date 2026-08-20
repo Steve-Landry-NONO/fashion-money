@@ -8,7 +8,12 @@ from app.matching.models import Match, WardrobeItem
 from app.matching.service import compute_match
 
 
-def create_capture(session: Session, user_id: str, provider: DecompositionProvider, image_ref: str | None = None) -> tuple[Capture, Look]:
+def create_capture(
+    session: Session,
+    user_id: str,
+    provider: DecompositionProvider,
+    image_ref: str | None = None,
+) -> tuple[Capture, Look]:
     capture = Capture(user_id=user_id, image_ref=image_ref, status="processing")
     session.add(capture)
     session.flush()

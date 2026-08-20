@@ -42,7 +42,11 @@ def get_gaps(look_id: str, user: User = Depends(get_current_user), session: Sess
 
 
 @router.get("/gaps/{piece_id}/options", response_model=OptionsOut)
-def get_options(piece_id: str, user: User = Depends(get_current_user), session: Session = Depends(get_session)) -> OptionsOut:
+def get_options(
+    piece_id: str,
+    user: User = Depends(get_current_user),
+    session: Session = Depends(get_session),
+) -> OptionsOut:
     try:
         piece = _owned_piece_for_user(session, user.id, piece_id)
     except ValueError:

@@ -3,8 +3,8 @@
 Revision ID: 0002_purchase_idempotency
 Revises: 0001_initial
 """
-from alembic import op
 import sqlalchemy as sa
+from alembic import op
 
 revision = "0002_purchase_idempotency"
 down_revision = "0001_initial"

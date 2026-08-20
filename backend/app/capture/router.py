@@ -12,7 +12,11 @@ router = APIRouter(tags=["capture"])
 
 
 @router.post("/captures", response_model=CaptureOut, status_code=201)
-def create_capture(body: CaptureIn, user: User = Depends(get_current_user), session: Session = Depends(get_session)) -> CaptureOut:
+def create_capture(
+    body: CaptureIn,
+    user: User = Depends(get_current_user),
+    session: Session = Depends(get_session),
+) -> CaptureOut:
     capture, look = service.create_capture(session, user.id, get_decomposition_provider(), body.image_ref)
     return CaptureOut(capture_id=capture.id, look_id=look.id, status=capture.status)
 

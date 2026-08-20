@@ -87,5 +87,11 @@ def test_purchase_confirmation_updates_wallet_and_wardrobe_once(client, session)
     assert first.json()["purchase_id"] == second.json()["purchase_id"]
     assert first.json()["wallet"]["available"] == 50.01
     assert session.scalar(select(func.count()).select_from(Purchase)) == 1
-    assert session.scalar(select(func.count()).select_from(WardrobeItem).where(WardrobeItem.user_id == DEV_USER_ID)) == 1
-    assert session.scalar(select(func.count()).select_from(BudgetLedger).where(BudgetLedger.type == "SPEND")) == 1
+    wardrobe_count = session.scalar(
+        select(func.count()).select_from(WardrobeItem).where(WardrobeItem.user_id == DEV_USER_ID)
+    )
+    assert wardrobe_count == 1
+    spend_count = session.scalar(
+        select(func.count()).select_from(BudgetLedger).where(BudgetLedger.type == "SPEND")
+    )
+    assert spend_count == 1
