@@ -153,7 +153,7 @@ export default function App() {
             <Card>
               <Text style={styles.eyebrow}>02 · IMPORTER TON INSPIRATION</Text>
               <Text style={styles.title}>Choisis une vraie capture depuis ta galerie.</Text>
-              <Text style={styles.copy}>La photo vient maintenant de ton téléphone. L’analyse Vision reste mockée pour isoler l’UX d’import.</Text>
+              <Text style={styles.copy}>L’image est envoyée au backend, stockée dans notre espace privé puis analysée par le provider Vision configuré.</Text>
               {imageUri ? <Image source={{uri: imageUri}} style={styles.preview} /> : <View style={styles.placeholder}><Text style={styles.muted}>Aucune image sélectionnée</Text></View>}
               <SecondaryButton label={imageUri ? "Changer d’image" : "Choisir dans la galerie"} onPress={pickImage} />
               <PrimaryButton label="Analyser ce look" onPress={capture} disabled={!imageUri} />
