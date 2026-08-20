@@ -2,6 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
 from app.analytics import emitter
+from app.analytics.context import context_for_option
 from app.catalog.models import Option
 from app.db import get_session
 from app.decision import service
@@ -30,7 +31,18 @@ def evaluate(
     if option is None:
         raise HTTPException(status_code=404, detail="option not found")
     ev = service.evaluate(session, user.id, option)
-    emitter.emit(emitter.DECISION_VIEWED, user.id, verdict=ev.verdict, available=ev.available, price=ev.price)
+    ctx = context_for_option(session, user.id, option)
+    emitter.emit(
+        emitter.DECISION_VIEWED,
+        user.id,
+        verdict=ev.verdict,
+        available=ev.available,
+        available_after=ev.available_after,
+        price=ev.price,
+        capture_index=ctx.capture_index,
+        wardrobe_count=ctx.wardrobe_count,
+        regime=ctx.regime,
+    )
     return EvaluationOut(**ev.__dict__)
 
 
