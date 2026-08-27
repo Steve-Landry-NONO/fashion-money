@@ -13,7 +13,7 @@ from app.db import get_session
 from app.identity.deps import get_current_user
 from app.identity.models import User
 from app.matching.models import Match
-from app.wallet import service as wallet_service
+from app.wallet.service import get_wallet
 
 router = APIRouter(tags=["catalog"])
 
@@ -38,16 +38,15 @@ def _search_context(session: Session, user: User, piece: LookPiece) -> SearchCon
     look = session.get(Look, piece.look_id)
     outfit = session.get(LookOutfit, piece.outfit_id) if piece.outfit_id else None
     try:
-        budget_available = float(wallet_service.get_wallet(session, user.id)["available"])
+        available = float(get_wallet(session, user.id)["available"])
     except ValueError:
-        budget_available = None
-    ship_to = "FR" if user.region in {"EU", "FR"} else user.region
+        available = None
     return SearchContext(
         piece=piece,
         outfit_style=outfit.style if outfit else None,
         dominant_palette=list(look.dominant_palette or []) if look else [],
-        budget_available=budget_available,
-        ship_to=ship_to,
+        budget_available=available,
+        ship_to=user.region,
         currency="EUR",
     )
 
@@ -102,19 +101,40 @@ def get_options(
     candidates = provider.search(_search_context(session, user, piece), limit=5)
     session.execute(delete(Option).where(Option.look_piece_id == piece_id))
     rows: list[Option] = []
-    for candidate in candidates:
+    for c in candidates:
         row = Option(
             look_piece_id=piece_id,
-            price=candidate.price,
-            merchant=candidate.merchant,
-            affiliate_url=candidate.product_url,
-            similarity=candidate.similarity,
-            purchase_score=candidate.purchase_score,
+            price=c.price,
+            merchant=c.merchant,
+            affiliate_url=c.affiliate_url,
+            similarity=c.similarity,
+            purchase_score=c.purchase_score,
+            provider=c.provider,
+            external_id=c.external_id,
+            variant_id=c.variant_id,
+            name=c.name,
+            currency=c.currency,
+            product_url=c.product_url,
+            checkout_url=c.checkout_url,
+            image_url=c.image_url,
+            original_price=c.original_price,
+            shipping_price=c.shipping_price,
+            availability=c.availability,
+            is_available=c.is_available,
+            brand=c.brand,
+            size=c.size,
+            color=c.color,
+            cut=c.cut,
+            material=c.material,
+            raw_category=c.raw_category,
+            condition=c.condition,
+            fetched_at=c.fetched_at,
+            expires_at=c.expires_at,
         )
         session.add(row)
         rows.append(row)
     session.commit()
-    best_id = max(rows, key=lambda row: float(row.purchase_score or 0)).id if rows else None
+    best_id = max(rows, key=lambda r: float(r.purchase_score or 0)).id if rows else None
     capture = _capture_for_piece(session, piece)
     ctx = context_for_capture(session, user.id, capture) if capture else None
     emitter.emit(
@@ -128,14 +148,22 @@ def get_options(
     return OptionsOut(
         options=[
             OptionOut(
-                id=row.id,
-                price=float(row.price),
-                merchant=row.merchant,
-                affiliate_url=row.affiliate_url,
-                similarity=row.similarity,
-                purchase_score=float(row.purchase_score) if row.purchase_score is not None else None,
-                is_best=row.id == best_id,
+                id=r.id,
+                price=float(r.price),
+                merchant=r.merchant,
+                affiliate_url=r.affiliate_url,
+                similarity=r.similarity,
+                purchase_score=float(r.purchase_score) if r.purchase_score is not None else None,
+                is_best=r.id == best_id,
+                name=r.name,
+                currency=r.currency,
+                product_url=r.product_url,
+                checkout_url=r.checkout_url,
+                image_url=r.image_url,
+                availability=r.availability,
+                is_available=r.is_available,
+                fetched_at=r.fetched_at,
             )
-            for row in rows
+            for r in rows
         ]
     )
