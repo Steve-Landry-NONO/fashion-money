@@ -3,7 +3,7 @@ import json
 import httpx
 
 from app.capture.models import LookPiece
-from app.catalog.providers import SearchContext, ShopifyGlobalCatalogProvider
+from app.catalog.providers import MockProductSearchProvider, SearchContext, ShopifyGlobalCatalogProvider
 
 
 def _ctx(*, budget: float = 100.0) -> SearchContext:
@@ -28,7 +28,13 @@ def _ctx(*, budget: float = 100.0) -> SearchContext:
     )
 
 
-def _shopify_product(price: int = 4999) -> dict:
+def _shopify_product(
+    price: int = 4999,
+    *,
+    variant_id: str = "gid://shopify/ProductVariant/variant-1",
+    available: bool = True,
+    condition: object = None,
+) -> dict:
     return {
         "id": "gid://shopify/p/product-1",
         "title": "Wide leg trousers",
@@ -45,11 +51,14 @@ def _shopify_product(price: int = 4999) -> dict:
         ],
         "variants": [
             {
-                "id": "gid://shopify/ProductVariant/variant-1",
+                "id": variant_id,
                 "price": {"amount": price, "currency": "EUR"},
                 "checkout_url": "https://merchant.example/cart/variant-1:1",
-                "availability": {"available": True, "status": "in_stock"},
-                "condition": ["new"],
+                "availability": {
+                    "available": available,
+                    "status": "in_stock" if available else "sold_out",
+                },
+                "condition": ["new"] if condition is None else condition,
                 "seller": {
                     "name": "Merchant FR",
                     "url": "https://merchant.example",
@@ -59,7 +68,7 @@ def _shopify_product(price: int = 4999) -> dict:
     }
 
 
-def test_shopify_search_passes_budget_in_minor_units_and_fr_context() -> None:
+def test_shopify_search_uses_discovery_ceiling_and_fr_context() -> None:
     seen: dict = {}
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -75,7 +84,10 @@ def test_shopify_search_passes_budget_in_minor_units_and_fr_context() -> None:
         )
 
     client = httpx.Client(transport=httpx.MockTransport(handler))
-    provider = ShopifyGlobalCatalogProvider(profile_url="https://fashion.money/ucp/profile.json", client=client)
+    provider = ShopifyGlobalCatalogProvider(
+        profile_url="https://fashion.money/ucp/profile.json",
+        client=client,
+    )
 
     candidates = provider.search(_ctx(), limit=3)
 
@@ -83,12 +95,17 @@ def test_shopify_search_passes_budget_in_minor_units_and_fr_context() -> None:
     meta = seen["params"]["arguments"]["meta"]
     assert seen["params"]["name"] == "search_catalog"
     assert meta["ucp-agent"]["profile"] == "https://fashion.money/ucp/profile.json"
-    assert catalog["filters"]["price"]["max"] == 10000
+    assert catalog["filters"]["price"]["max"] == 15000
     assert catalog["filters"]["ships_to"] == {"country": "FR"}
     assert catalog["context"]["address_country"] == "FR"
     assert catalog["context"]["currency"] == "EUR"
     assert "smart casual" in catalog["query"]
     assert len(candidates) == 1
+
+
+def test_mock_keeps_an_over_budget_candidate_for_decision_engine() -> None:
+    candidates = MockProductSearchProvider().search(_ctx(budget=50.0), limit=5)
+    assert any(candidate.price > 50.0 for candidate in candidates)
 
 
 def test_shopify_candidate_keeps_product_and_checkout_urls_separate() -> None:
@@ -114,6 +131,7 @@ def test_shopify_candidate_keeps_product_and_checkout_urls_separate() -> None:
     assert candidate.checkout_url == "https://merchant.example/cart/variant-1:1"
     assert candidate.variant_id == "gid://shopify/ProductVariant/variant-1"
     assert candidate.availability == "in_stock"
+    assert candidate.is_available is True
     assert candidate.color == "Beige"
     assert candidate.size == "M"
 
@@ -125,8 +143,14 @@ def test_shopify_verify_revalidates_current_variant_price() -> None:
         body = json.loads(request.content)
         tool = body["params"]["name"]
         calls.append(tool)
-        content = {"products": [_shopify_product()]} if tool == "search_catalog" else {"product": _shopify_product(5999)}
-        return httpx.Response(200, json={"jsonrpc": "2.0", "id": 1, "result": {"structuredContent": content}})
+        if tool == "search_catalog":
+            content = {"products": [_shopify_product()]}
+        else:
+            content = {"product": _shopify_product(5999)}
+        return httpx.Response(
+            200,
+            json={"jsonrpc": "2.0", "id": 1, "result": {"structuredContent": content}},
+        )
 
     provider = ShopifyGlobalCatalogProvider(
         profile_url="https://fashion.money/ucp/profile.json",
@@ -139,3 +163,70 @@ def test_shopify_verify_revalidates_current_variant_price() -> None:
     assert discovered.price == 49.99
     assert verified is not None
     assert verified.price == 59.99
+
+
+def test_shopify_verify_fails_closed_if_exact_variant_is_gone() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        body = json.loads(request.content)
+        if body["params"]["name"] == "search_catalog":
+            content = {"products": [_shopify_product()]}
+        else:
+            content = {
+                "product": _shopify_product(
+                    variant_id="gid://shopify/ProductVariant/variant-2",
+                )
+            }
+        return httpx.Response(
+            200,
+            json={"jsonrpc": "2.0", "id": 1, "result": {"structuredContent": content}},
+        )
+
+    provider = ShopifyGlobalCatalogProvider(
+        profile_url="https://fashion.money/ucp/profile.json",
+        client=httpx.Client(transport=httpx.MockTransport(handler)),
+    )
+    discovered = provider.search(_ctx(), limit=1)[0]
+    assert provider.verify(discovered) is None
+
+
+def test_shopify_verify_fails_closed_when_available_is_false() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        body = json.loads(request.content)
+        if body["params"]["name"] == "search_catalog":
+            content = {"products": [_shopify_product()]}
+        else:
+            content = {"product": _shopify_product(available=False)}
+        return httpx.Response(
+            200,
+            json={"jsonrpc": "2.0", "id": 1, "result": {"structuredContent": content}},
+        )
+
+    provider = ShopifyGlobalCatalogProvider(
+        profile_url="https://fashion.money/ucp/profile.json",
+        client=httpx.Client(transport=httpx.MockTransport(handler)),
+    )
+    discovered = provider.search(_ctx(), limit=1)[0]
+    assert provider.verify(discovered) is None
+
+
+def test_shopify_preserves_string_condition() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "jsonrpc": "2.0",
+                "id": 1,
+                "result": {
+                    "structuredContent": {
+                        "products": [_shopify_product(condition="used")],
+                    }
+                },
+            },
+        )
+
+    provider = ShopifyGlobalCatalogProvider(
+        profile_url="https://fashion.money/ucp/profile.json",
+        client=httpx.Client(transport=httpx.MockTransport(handler)),
+    )
+    candidate = provider.search(_ctx(), limit=1)[0]
+    assert candidate.condition == "used"
