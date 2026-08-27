@@ -23,6 +23,12 @@ class Settings(BaseSettings):
     # Validated Groq baseline from the local 4-image smoke benchmark.
     vision_model: str = "qwen/qwen3.8-27b"
 
+    # Product Search is provider-swappable. Shopify is experimental until the
+    # France benchmark passes; mock remains the safe default for CI/dev.
+    product_search_provider: str = "mock"
+    shopify_ucp_profile_url: str | None = None
+    product_search_timeout_seconds: float = 10.0
+
     # Decision Engine config (externalised — parameters to learn, not to debate)
     tight_threshold_abs: float = 15.0
     tight_threshold_pct: float = 0.15
