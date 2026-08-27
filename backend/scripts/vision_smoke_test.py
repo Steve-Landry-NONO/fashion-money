@@ -43,12 +43,16 @@ def missing_ratio(values: list[str | None]) -> float:
     return sum(value is None or not str(value).strip() for value in values) / len(values)
 
 
-def summarize(results: list[dict[str, Any]]) -> dict[str, Any]:
+def summarize(results: list[dict[str, Any]], errors: list[dict[str, str]]) -> dict[str, Any]:
     piece_counts = [result["piece_count"] for result in results]
     all_pieces = [piece for result in results for piece in result["pieces"]]
     categories = [piece["category"] for piece in all_pieces]
+    attempted = len(results) + len(errors)
     return {
-        "images": len(results),
+        "images_attempted": attempted,
+        "images_succeeded": len(results),
+        "images_failed": len(errors),
+        "success_ratio": round(len(results) / attempted, 3) if attempted else 0,
         "avg_piece_count": round(mean(piece_counts), 2) if piece_counts else 0,
         "min_piece_count": min(piece_counts, default=0),
         "max_piece_count": max(piece_counts, default=0),
@@ -89,8 +93,20 @@ def run(images_dir: Path, output: Path, provider_name: str) -> int:
         return 2
 
     results: list[dict[str, Any]] = []
+    errors: list[dict[str, str]] = []
     for image in images:
-        look = provider.decompose(str(image))
+        try:
+            look = provider.decompose(str(image))
+        except Exception as exc:  # smoke harness must preserve partial evidence
+            error = {
+                "image": image.name,
+                "error_type": type(exc).__name__,
+                "message": str(exc),
+            }
+            errors.append(error)
+            print(f"{image.name}: ERROR {error['error_type']} - {error['message']}", file=sys.stderr)
+            continue
+
         result = {
             "image": image.name,
             "style": look.style,
@@ -110,12 +126,13 @@ def run(images_dir: Path, output: Path, provider_name: str) -> int:
         "provider": provider_name,
         "vision_model": settings.vision_model,
         "results": results,
-        "summary": summarize(results),
+        "errors": errors,
+        "summary": summarize(results, errors),
     }
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_text(json.dumps(report, indent=2, ensure_ascii=False), encoding="utf-8")
     print(f"\nReport written to {output}")
-    return 0
+    return 0 if results else 1
 
 
 def main() -> int:
