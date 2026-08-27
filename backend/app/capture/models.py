@@ -1,7 +1,7 @@
 import uuid
 from datetime import datetime
 
-from sqlalchemy import DateTime, ForeignKey, String, func
+from sqlalchemy import JSON, Boolean, DateTime, Float, ForeignKey, Integer, String, func
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db import Base
@@ -21,14 +21,29 @@ class Look(Base):
     id: Mapped[str] = mapped_column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
     capture_id: Mapped[str] = mapped_column(ForeignKey("captures.id"), index=True)
     style: Mapped[str | None] = mapped_column(String, nullable=True)
+    image_type: Mapped[str] = mapped_column(String, default="single_outfit")
+    dominant_palette: Mapped[list[str]] = mapped_column(JSON, default=list)
+    representative_outfit_index: Mapped[int] = mapped_column(Integer, default=0)
+
+
+class LookOutfit(Base):
+    __tablename__ = "look_outfits"
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
+    look_id: Mapped[str] = mapped_column(ForeignKey("looks.id", ondelete="CASCADE"), index=True)
+    position: Mapped[int] = mapped_column(Integer)
+    style: Mapped[str | None] = mapped_column(String, nullable=True)
+    is_representative: Mapped[bool] = mapped_column(Boolean, default=False)
 
 
 class LookPiece(Base):
     __tablename__ = "look_pieces"
     id: Mapped[str] = mapped_column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
     look_id: Mapped[str] = mapped_column(ForeignKey("looks.id"), index=True)
+    outfit_id: Mapped[str | None] = mapped_column(ForeignKey("look_outfits.id", ondelete="CASCADE"), index=True, nullable=True)
+    category_raw: Mapped[str | None] = mapped_column(String, nullable=True)
     category: Mapped[str] = mapped_column(String)
     color: Mapped[str | None] = mapped_column(String, nullable=True)
     cut: Mapped[str | None] = mapped_column(String, nullable=True)
     material: Mapped[str | None] = mapped_column(String, nullable=True)
     swatch: Mapped[str | None] = mapped_column(String, nullable=True)
+    confidence: Mapped[float | None] = mapped_column(Float, nullable=True)
