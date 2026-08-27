@@ -26,27 +26,27 @@ Qwen 3.8 is the current Groq baseline. On the four reference collages it reached
 
 ## V2 output contract
 
-Vision must return:
+Vision returns:
 
-- `image_type`: `single_outfit` or `collage`
-- overall `style`
-- `dominant_palette[]`
-- `outfits[]`, one entry per distinct visible outfit/person
-- each outfit has `style` and `pieces[]`
-- each piece keeps `category_raw` plus a deterministic normalized `category`
-- optional `color`, `cut`, `material`, `swatch`, and `confidence`
-- `representative_outfit_index`
+- `image_type`: `single_outfit` or `collage`;
+- overall `style`;
+- `dominant_palette[]`;
+- `outfits[]`, one entry per distinct visible outfit/person;
+- each outfit has `style` and `pieces[]`;
+- each piece keeps `category_raw` plus a deterministic normalized `category`;
+- optional `color`, `cut`, `material`, `swatch`, and `confidence`;
+- `representative_outfit_index`.
 
-The application remains backward-compatible for the current vertical slice: downstream matching consumes only the representative outfit through `DecomposedLook.pieces`. Multi-outfit selection is a later UI concern.
+The full contract is now persisted. `Look` stores image type, palette and representative index; `LookOutfit` stores every detected outfit; `LookPiece` stores outfit membership, raw category and confidence. The current mobile client remains backward-compatible because `GET /looks/{id}` still exposes top-level `pieces[]` for the representative outfit while also returning `outfits[]` for the upcoming selection UI.
 
 ## Category normalization
 
 The provider layer normalizes obvious aliases before Matching/Product Search, for example:
 
-- `pants`, `slacks` -> `trousers`
-- `polo shirt` -> `polo`
-- `tee`, `t shirt` -> `t-shirt`
-- loafer variants -> `shoes`
+- `pants`, `slacks` -> `trousers`;
+- `polo shirt` -> `polo`;
+- `tee`, `t shirt` -> `t-shirt`;
+- loafer variants -> `shoes`.
 
 The raw category is retained so normalization remains auditable.
 
@@ -70,6 +70,23 @@ The report contains success ratio, collages detected, average outfit count, aver
 
 Qwen 3.8 passes the transport/structured-output gate on the four reference collages: 4 attempted, 4 succeeded, 0 failed. It also preserves uncertainty better on material than the earlier Qwen 3.6 runs. Segmentation is usable but not perfect: two reference collages produced an extra one-piece outfit, so low-information/ambiguous outfit handling remains a known issue rather than a blocker for the provider boundary itself.
 
+A provider-side guardrail now prevents a one-piece ghost outfit from being auto-selected as representative whenever a richer outfit exists. This is only a safety fallback: the product answer for multi-outfit captures remains explicit user selection — **« Quel look veux-tu recréer ? »**.
+
+Groq retries use three distinct prompts rather than replaying an identical deterministic request.
+
+## Tests
+
+CI covers the deterministic contract logic without making live provider calls:
+
+- category alias normalization;
+- empty-outfit filtering;
+- promotion to collage when multiple valid outfits survive;
+- representative-index clamp / ghost-outfit guardrail;
+- persistence of all outfits;
+- persistence of `category_raw` and `confidence`.
+
+Live Groq benchmarking remains local-only.
+
 ## Gate before real Product Search
 
 Proceed when the same four screenshots show:
@@ -79,6 +96,7 @@ Proceed when the same four screenshots show:
 - representative outfits with coherent compositions in most cases;
 - normalized categories suitable for stable search queries;
 - no systematic overconfidence on fabric/cut;
-- material treated as weak evidence rather than a hard matching constraint.
+- material treated as weak evidence rather than a hard matching constraint;
+- full V2 contract surviving persistence so outfit selection can be built without re-running Vision.
 
 Do not silently auto-select ambiguous one-piece outfits in the product flow. Multi-outfit selection or ambiguity handling must protect Product Search from obvious segmentation noise.
