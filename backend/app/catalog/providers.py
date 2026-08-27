@@ -29,12 +29,14 @@ class ProductCandidate:
     currency: str
     merchant: str
     product_url: str
+    fetched_at: datetime
     image_url: str | None = None
     checkout_url: str | None = None
     variant_id: str | None = None
     original_price: float | None = None
     shipping_price: float | None = None
     availability: str | None = None
+    is_available: bool | None = None
     brand: str | None = None
     size: str | None = None
     color: str | None = None
@@ -42,14 +44,13 @@ class ProductCandidate:
     material: str | None = None
     raw_category: str | None = None
     condition: str = "new"
-    fetched_at: datetime = datetime.min.replace(tzinfo=UTC)
     expires_at: datetime | None = None
     similarity: int | None = None
     purchase_score: float | None = None
 
     @property
     def affiliate_url(self) -> str:
-        """Backward-compatible alias until Option persistence is upgraded."""
+        """Backward-compatible alias while the mobile still reads affiliate_url."""
         return self.product_url
 
 
@@ -73,6 +74,7 @@ class MockProductSearchProvider:
                 product_url="https://example.test/39",
                 fetched_at=now,
                 expires_at=now + timedelta(hours=24),
+                is_available=True,
                 similarity=82,
                 purchase_score=0.72,
             ),
@@ -86,6 +88,7 @@ class MockProductSearchProvider:
                 product_url="https://example.test/49",
                 fetched_at=now,
                 expires_at=now + timedelta(hours=24),
+                is_available=True,
                 similarity=94,
                 purchase_score=0.91,
             ),
@@ -99,26 +102,28 @@ class MockProductSearchProvider:
                 product_url="https://example.test/69",
                 fetched_at=now,
                 expires_at=now + timedelta(hours=24),
+                is_available=True,
                 similarity=97,
                 purchase_score=0.84,
             ),
         ]
         if ctx.budget_available is not None:
-            within_budget = [candidate for candidate in candidates if candidate.price <= ctx.budget_available]
-            if within_budget:
-                candidates = within_budget
+            discovery_ceiling = max(0.0, ctx.budget_available * 1.5)
+            bounded = [candidate for candidate in candidates if candidate.price <= discovery_ceiling]
+            if bounded:
+                candidates = bounded
         return candidates[:limit]
 
     def verify(self, candidate: ProductCandidate) -> ProductCandidate | None:
-        return candidate
+        return candidate if candidate.is_available is not False else None
 
 
 class ShopifyGlobalCatalogProvider:
     """Experimental Shopify Global Catalog MCP adapter.
 
     The endpoint needs no API key, but every request must advertise a public UCP
-    agent profile URL. Prices are returned in minor units and are localized via
-    the request context.
+    agent profile URL. The live smoke test must discover the MCP tool schemas
+    before this adapter is considered production-ready.
     """
 
     endpoint = "https://catalog.shopify.com/api/ucp/mcp"
@@ -127,7 +132,7 @@ class ShopifyGlobalCatalogProvider:
         self.profile_url = profile_url or settings.shopify_ucp_profile_url
         if not self.profile_url:
             raise RuntimeError("SHOPIFY_UCP_PROFILE_URL is required for Shopify Global Catalog")
-        self.client = client or httpx.Client(timeout=settings.product_search_timeout_seconds)
+        self.client = client or _shared_shopify_client()
 
     def _call(self, tool: str, catalog: dict[str, Any]) -> dict[str, Any]:
         payload = {
@@ -142,12 +147,26 @@ class ShopifyGlobalCatalogProvider:
                 },
             },
         }
-        response = self.client.post(self.endpoint, json=payload)
+        response = self.client.post(
+            self.endpoint,
+            json=payload,
+            headers={"Accept": "application/json, text/event-stream"},
+        )
         response.raise_for_status()
-        body = response.json()
+        body = _decode_mcp_response(response)
         if body.get("error"):
             raise RuntimeError(f"Shopify catalog error: {body['error']}")
         return body.get("result", {}).get("structuredContent", {})
+
+    def tools_list(self) -> dict[str, Any]:
+        """Discover live MCP schemas before trusting the experimental adapter."""
+        response = self.client.post(
+            self.endpoint,
+            json={"jsonrpc": "2.0", "method": "tools/list", "id": 1},
+            headers={"Accept": "application/json, text/event-stream"},
+        )
+        response.raise_for_status()
+        return _decode_mcp_response(response)
 
     @staticmethod
     def _query(ctx: SearchContext) -> str:
@@ -186,12 +205,33 @@ class ShopifyGlobalCatalogProvider:
                 return str(value) if value else None
         return None
 
-    def _candidate_from_product(self, product: dict[str, Any], *, fetched_at: datetime) -> ProductCandidate | None:
+    @staticmethod
+    def _condition(variant: dict[str, Any]) -> str:
+        condition = variant.get("condition")
+        if isinstance(condition, list):
+            return str(condition[0]) if condition else "new"
+        if isinstance(condition, str) and condition.strip():
+            return condition
+        return "new"
+
+    def _candidate_from_product(
+        self,
+        product: dict[str, Any],
+        *,
+        fetched_at: datetime,
+        required_variant_id: str | None = None,
+    ) -> ProductCandidate | None:
         variants = product.get("variants") or []
-        variant = next(
-            (item for item in variants if item.get("availability", {}).get("available") is True),
-            variants[0] if variants else None,
-        )
+        if required_variant_id is not None:
+            variant = next((item for item in variants if str(item.get("id")) == required_variant_id), None)
+            if variant is None:
+                return None
+        else:
+            variant = next(
+                (item for item in variants if item.get("availability", {}).get("available") is True),
+                variants[0] if variants else None,
+            )
+
         price_data = (variant or {}).get("price") or product.get("price_range", {}).get("min") or {}
         amount = price_data.get("amount")
         if amount is None:
@@ -200,10 +240,7 @@ class ShopifyGlobalCatalogProvider:
         merchant = seller.get("name") or seller.get("domain") or "Shopify merchant"
         availability_data = (variant or {}).get("availability") or {}
         categories = product.get("categories") or []
-        raw_category = None
-        if categories:
-            raw_category = categories[0].get("value")
-        condition = (variant or {}).get("condition") or ["new"]
+        raw_category = categories[0].get("value") if categories else None
         return ProductCandidate(
             provider="shopify_global_catalog",
             external_id=str(product.get("id", "")),
@@ -213,16 +250,17 @@ class ShopifyGlobalCatalogProvider:
             currency=str(price_data.get("currency") or "EUR"),
             merchant=str(merchant),
             product_url=str(product.get("url") or seller.get("url") or ""),
+            fetched_at=fetched_at,
             checkout_url=(str(variant.get("checkout_url")) if variant and variant.get("checkout_url") else None),
             image_url=self._first_image(product),
             availability=str(availability_data.get("status")) if availability_data.get("status") else None,
+            is_available=availability_data.get("available") if isinstance(availability_data.get("available"), bool) else None,
             size=self._attribute(product, "Size"),
             color=self._attribute(product, "Color"),
             material=self._attribute(product, "Material"),
             cut=self._attribute(product, "Style"),
             raw_category=str(raw_category) if raw_category else None,
-            condition=str(condition[0]) if isinstance(condition, list) and condition else "new",
-            fetched_at=fetched_at,
+            condition=self._condition(variant or {}),
             expires_at=fetched_at + timedelta(hours=24),
         )
 
@@ -232,7 +270,8 @@ class ShopifyGlobalCatalogProvider:
             "available": True,
         }
         if ctx.budget_available is not None:
-            filters["price"] = {"max": max(0, round(ctx.budget_available * 100))}
+            discovery_ceiling = max(0.0, ctx.budget_available * 1.5)
+            filters["price"] = {"max": round(discovery_ceiling * 100)}
         if ctx.piece.color:
             filters["attributes"] = [{"name": "Color", "values": [ctx.piece.color]}]
         intent_parts = [ctx.outfit_style or "", ", ".join(ctx.dominant_palette)]
@@ -257,21 +296,78 @@ class ShopifyGlobalCatalogProvider:
 
     def verify(self, candidate: ProductCandidate) -> ProductCandidate | None:
         catalog = {
-            "id": candidate.variant_id or candidate.external_id,
+            "id": candidate.external_id,
             "context": {"address_country": "FR", "currency": candidate.currency},
         }
         content = self._call("get_product", catalog)
         product = content.get("product")
         if not product:
             return None
-        verified = self._candidate_from_product(product, fetched_at=datetime.now(UTC))
-        if verified is None or verified.availability == "out_of_stock":
+        verified = self._candidate_from_product(
+            product,
+            fetched_at=datetime.now(UTC),
+            required_variant_id=candidate.variant_id,
+        )
+        if verified is None or verified.is_available is not True:
             return None
         return verified
 
 
-def get_product_search_provider() -> ProductSearchProvider:
-    provider = settings.product_search_provider.lower()
-    if provider == "shopify":
+_SHARED_SHOPIFY_CLIENT: httpx.Client | None = None
+
+
+def _shared_shopify_client() -> httpx.Client:
+    global _SHARED_SHOPIFY_CLIENT
+    if _SHARED_SHOPIFY_CLIENT is None:
+        _SHARED_SHOPIFY_CLIENT = httpx.Client(timeout=settings.product_search_timeout_seconds)
+    return _SHARED_SHOPIFY_CLIENT
+
+
+def _decode_mcp_response(response: httpx.Response) -> dict[str, Any]:
+    content_type = response.headers.get("content-type", "")
+    if "text/event-stream" not in content_type:
+        return response.json()
+    for line in response.text.splitlines():
+        if line.startswith("data:"):
+            data = line.removeprefix("data:").strip()
+            if data and data != "[DONE]":
+                return response.json() if data == response.text else __import__("json").loads(data)
+    raise RuntimeError("MCP SSE response contained no JSON data")
+
+
+def candidate_from_option(option: Any) -> ProductCandidate:
+    """Rehydrate a provider candidate from persisted Option fields."""
+    return ProductCandidate(
+        provider=option.provider or "mock",
+        external_id=option.external_id or option.id,
+        name=option.name or "Product option",
+        price=float(option.price),
+        currency=option.currency or "EUR",
+        merchant=option.merchant or "Unknown merchant",
+        product_url=option.product_url or option.affiliate_url or "",
+        fetched_at=option.fetched_at,
+        image_url=option.image_url,
+        checkout_url=option.checkout_url,
+        variant_id=option.variant_id,
+        original_price=float(option.original_price) if option.original_price is not None else None,
+        shipping_price=float(option.shipping_price) if option.shipping_price is not None else None,
+        availability=option.availability,
+        is_available=option.is_available,
+        brand=option.brand,
+        size=option.size,
+        color=option.color,
+        cut=option.cut,
+        material=option.material,
+        raw_category=option.raw_category,
+        condition=option.condition or "new",
+        expires_at=option.expires_at,
+        similarity=option.similarity,
+        purchase_score=float(option.purchase_score) if option.purchase_score is not None else None,
+    )
+
+
+def get_product_search_provider(provider_name: str | None = None) -> ProductSearchProvider:
+    provider = (provider_name or settings.product_search_provider).lower()
+    if provider in {"shopify", "shopify_global_catalog"}:
         return ShopifyGlobalCatalogProvider()
     return MockProductSearchProvider()
