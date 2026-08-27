@@ -28,7 +28,11 @@ def _revalidate_option(session: Session, option: Option) -> None:
     if option.fetched_at is None:
         raise HTTPException(status_code=409, detail="option cannot be revalidated")
     provider = get_product_search_provider(option.provider)
-    verified = provider.verify(candidate_from_option(option))
+    try:
+        candidate = candidate_from_option(option)
+    except ValueError:
+        raise HTTPException(status_code=409, detail="option cannot be revalidated") from None
+    verified = provider.verify(candidate)
     if verified is None:
         option.is_available = False
         session.commit()
