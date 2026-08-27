@@ -2,7 +2,7 @@ import base64
 from dataclasses import dataclass
 from typing import Any, Protocol
 
-from openai import OpenAI
+from openai import BadRequestError, OpenAI
 from pydantic import BaseModel, Field
 
 from app.capture.storage import ImageStorage, get_image_storage
@@ -145,18 +145,32 @@ class GroqDecompositionProvider:
                 ],
             }
         ]
-        completion = self.client.chat.completions.create(
-            model=settings.vision_model,
-            messages=messages,
-            response_format={"type": "json_object"},
-            temperature=0.2,
-            max_completion_tokens=2048,
-        )
-        content = completion.choices[0].message.content
-        if not content:
-            raise ValueError("Groq vision provider returned empty output")
-        parsed = VisionLook.model_validate_json(content)
-        return _to_decomposed_look(parsed)
+
+        last_error: BadRequestError | None = None
+        for _ in range(2):
+            try:
+                completion = self.client.chat.completions.create(
+                    model=settings.vision_model,
+                    messages=messages,
+                    response_format={"type": "json_object"},
+                    temperature=0,
+                    max_completion_tokens=3072,
+                )
+                content = completion.choices[0].message.content
+                if not content:
+                    raise ValueError("Groq vision provider returned empty output")
+                parsed = VisionLook.model_validate_json(content)
+                return _to_decomposed_look(parsed)
+            except BadRequestError as exc:
+                body = exc.body if isinstance(exc.body, dict) else {}
+                error = body.get("error", {}) if isinstance(body, dict) else {}
+                if not isinstance(error, dict) or error.get("code") != "json_validate_failed":
+                    raise
+                last_error = exc
+
+        if last_error is not None:
+            raise last_error
+        raise RuntimeError("Groq vision provider failed without returning an error")
 
 
 def get_decomposition_provider(storage: ImageStorage | None = None) -> DecompositionProvider:
