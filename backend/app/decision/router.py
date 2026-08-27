@@ -4,6 +4,7 @@ from sqlalchemy.orm import Session
 from app.analytics import emitter
 from app.analytics.context import context_for_option
 from app.catalog.models import Option
+from app.catalog.providers import candidate_from_option, get_product_search_provider
 from app.db import get_session
 from app.decision import service
 from app.decision.schemas import (
@@ -21,6 +22,32 @@ from app.wallet.service import get_wallet
 router = APIRouter(tags=["decision"])
 
 
+def _revalidate_option(session: Session, option: Option) -> None:
+    if not option.provider or option.provider == "mock":
+        return
+    if option.fetched_at is None:
+        raise HTTPException(status_code=409, detail="option cannot be revalidated")
+    provider = get_product_search_provider(option.provider)
+    verified = provider.verify(candidate_from_option(option))
+    if verified is None:
+        option.is_available = False
+        session.commit()
+        raise HTTPException(status_code=409, detail="option no longer available")
+
+    option.price = verified.price
+    option.currency = verified.currency
+    option.merchant = verified.merchant
+    option.product_url = verified.product_url
+    option.affiliate_url = verified.affiliate_url
+    option.checkout_url = verified.checkout_url
+    option.image_url = verified.image_url
+    option.availability = verified.availability
+    option.is_available = verified.is_available
+    option.fetched_at = verified.fetched_at
+    option.expires_at = verified.expires_at
+    session.commit()
+
+
 @router.post("/decisions/evaluate", response_model=EvaluationOut)
 def evaluate(
     body: EvaluateIn,
@@ -30,6 +57,7 @@ def evaluate(
     option = session.get(Option, body.option_id)
     if option is None:
         raise HTTPException(status_code=404, detail="option not found")
+    _revalidate_option(session, option)
     ev = service.evaluate(session, user.id, option)
     ctx = context_for_option(session, user.id, option)
     emitter.emit(
