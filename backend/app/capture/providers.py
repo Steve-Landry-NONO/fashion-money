@@ -100,10 +100,20 @@ class VisionLook(BaseModel):
     representative_outfit_index: int = 0
 
 
+def _choose_representative_index(outfits: list[DecomposedOutfit], requested_index: int) -> int:
+    """Never auto-select a one-piece ghost outfit when a richer outfit exists."""
+    requested = min(max(requested_index, 0), len(outfits) - 1)
+    if len(outfits[requested].pieces) > 1:
+        return requested
+    richer = [index for index, outfit in enumerate(outfits) if len(outfit.pieces) > 1]
+    if not richer:
+        return requested
+    return max(richer, key=lambda index: len(outfits[index].pieces))
+
+
 def _to_decomposed_look(parsed: VisionLook) -> DecomposedLook:
     if not parsed.outfits:
         raise ValueError("vision provider returned no outfits")
-    index = min(max(parsed.representative_outfit_index, 0), len(parsed.outfits) - 1)
     outfits: list[DecomposedOutfit] = []
     for outfit in parsed.outfits:
         if not outfit.pieces:
@@ -123,7 +133,7 @@ def _to_decomposed_look(parsed: VisionLook) -> DecomposedLook:
         outfits.append(DecomposedOutfit(style=outfit.style, pieces=pieces))
     if not outfits:
         raise ValueError("vision provider returned no wearable pieces")
-    index = min(index, len(outfits) - 1)
+    index = _choose_representative_index(outfits, parsed.representative_outfit_index)
     return DecomposedLook(
         image_type="collage" if parsed.image_type.lower() == "collage" or len(outfits) > 1 else "single_outfit",
         style=parsed.style,
@@ -152,10 +162,16 @@ VISION_PROMPT = (
 )
 
 REPAIR_PROMPT = (
-    "Return only a compact valid JSON object for the fashion image. Required keys: image_type, style, "
-    "dominant_palette, outfits, representative_outfit_index. For collages: exactly one outfit per visible person, "
-    "no merging and no splitting. Each outfit: style, pieces. Each piece: category, color, cut, material, swatch, "
-    "confidence. Use null for uncertain attributes. No markdown."
+    "Return only compact valid JSON for this fashion image. For every visible person, create one outfit and keep "
+    "all of that person's visible garments together. Required top-level keys: image_type, style, dominant_palette, "
+    "outfits, representative_outfit_index. Each outfit: style, pieces. Each piece: category, color, cut, material, "
+    "swatch, confidence. Unknown optional attributes must be null. No prose or markdown."
+)
+
+MINIMAL_REPAIR_PROMPT = (
+    "JSON only. Keys: image_type, style, dominant_palette, outfits, representative_outfit_index. One outfit per "
+    "visible person. Each outfit has style and pieces; each piece has category, color, cut, material, swatch, "
+    "confidence. Use null when unsure. Do not output explanations."
 )
 
 
@@ -221,8 +237,8 @@ class GroqDecompositionProvider:
     def decompose(self, image_ref: str | None = None) -> DecomposedLook:
         data_url = _image_data_url(self.storage, image_ref)
         last_error: Exception | None = None
-        prompts = (VISION_PROMPT, REPAIR_PROMPT, REPAIR_PROMPT)
-        for prompt in prompts:
+        # Deterministic calls are still useful when the prompt changes; never replay the exact same request.
+        for prompt in (VISION_PROMPT, REPAIR_PROMPT, MINIMAL_REPAIR_PROMPT):
             try:
                 return self._request(data_url, prompt)
             except BadRequestError as exc:
