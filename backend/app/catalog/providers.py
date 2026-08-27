@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any, Protocol
@@ -239,6 +240,7 @@ class ShopifyGlobalCatalogProvider:
         seller = (variant or {}).get("seller") or {}
         merchant = seller.get("name") or seller.get("domain") or "Shopify merchant"
         availability_data = (variant or {}).get("availability") or {}
+        available_value = availability_data.get("available")
         categories = product.get("categories") or []
         raw_category = categories[0].get("value") if categories else None
         return ProductCandidate(
@@ -251,10 +253,18 @@ class ShopifyGlobalCatalogProvider:
             merchant=str(merchant),
             product_url=str(product.get("url") or seller.get("url") or ""),
             fetched_at=fetched_at,
-            checkout_url=(str(variant.get("checkout_url")) if variant and variant.get("checkout_url") else None),
+            checkout_url=(
+                str(variant.get("checkout_url"))
+                if variant and variant.get("checkout_url")
+                else None
+            ),
             image_url=self._first_image(product),
-            availability=str(availability_data.get("status")) if availability_data.get("status") else None,
-            is_available=availability_data.get("available") if isinstance(availability_data.get("available"), bool) else None,
+            availability=(
+                str(availability_data.get("status"))
+                if availability_data.get("status")
+                else None
+            ),
+            is_available=available_value if isinstance(available_value, bool) else None,
             size=self._attribute(product, "Size"),
             color=self._attribute(product, "Color"),
             material=self._attribute(product, "Material"),
@@ -331,12 +341,14 @@ def _decode_mcp_response(response: httpx.Response) -> dict[str, Any]:
         if line.startswith("data:"):
             data = line.removeprefix("data:").strip()
             if data and data != "[DONE]":
-                return response.json() if data == response.text else __import__("json").loads(data)
+                return json.loads(data)
     raise RuntimeError("MCP SSE response contained no JSON data")
 
 
 def candidate_from_option(option: Any) -> ProductCandidate:
     """Rehydrate a provider candidate from persisted Option fields."""
+    if option.fetched_at is None:
+        raise ValueError("persisted option has no fetched_at timestamp")
     return ProductCandidate(
         provider=option.provider or "mock",
         external_id=option.external_id or option.id,
