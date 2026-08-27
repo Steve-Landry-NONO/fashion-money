@@ -4,15 +4,18 @@ from __future__ import annotations
 import argparse
 import json
 import mimetypes
-import os
 import sys
 from dataclasses import asdict
 from pathlib import Path
 from statistics import mean
 from typing import Any
 
-from app.capture.providers import OpenAIDecompositionProvider
+from app.capture.providers import (
+    GroqDecompositionProvider,
+    OpenAIDecompositionProvider,
+)
 from app.capture.storage import StoredImage
+from app.config import settings
 
 
 SUPPORTED_SUFFIXES = {".jpg", ".jpeg", ".png", ".webp"}
@@ -58,11 +61,19 @@ def summarize(results: list[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
-def run(images_dir: Path, output: Path) -> int:
-    if not os.getenv("OPENAI_API_KEY"):
-        print("OPENAI_API_KEY is required for the live smoke test.", file=sys.stderr)
-        return 2
+def build_provider(provider_name: str, storage: FileSystemImageStorage):
+    if provider_name == "groq":
+        if not settings.groq_api_key:
+            raise RuntimeError("GROQ_API_KEY is required for the Groq smoke test")
+        return GroqDecompositionProvider(storage=storage)
+    if provider_name == "openai":
+        if not settings.openai_api_key:
+            raise RuntimeError("OPENAI_API_KEY is required for the OpenAI smoke test")
+        return OpenAIDecompositionProvider(storage=storage)
+    raise ValueError("provider must be 'groq' or 'openai'")
 
+
+def run(images_dir: Path, output: Path, provider_name: str) -> int:
     images = discover_images(images_dir)
     if not 3 <= len(images) <= 5:
         print(
@@ -71,9 +82,13 @@ def run(images_dir: Path, output: Path) -> int:
         )
         return 2
 
-    provider = OpenAIDecompositionProvider(storage=FileSystemImageStorage())
-    results: list[dict[str, Any]] = []
+    try:
+        provider = build_provider(provider_name, FileSystemImageStorage())
+    except (RuntimeError, ValueError) as exc:
+        print(str(exc), file=sys.stderr)
+        return 2
 
+    results: list[dict[str, Any]] = []
     for image in images:
         look = provider.decompose(str(image))
         result = {
@@ -92,7 +107,8 @@ def run(images_dir: Path, output: Path) -> int:
             )
 
     report = {
-        "vision_model": os.getenv("VISION_MODEL", "gpt-5.6-luna"),
+        "provider": provider_name,
+        "vision_model": settings.vision_model,
         "results": results,
         "summary": summarize(results),
     }
@@ -106,13 +122,19 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Run the live Fashion Money vision smoke test.")
     parser.add_argument("images_dir", type=Path, help="Directory containing 3 to 5 diverse look screenshots")
     parser.add_argument(
+        "--provider",
+        choices=("groq", "openai"),
+        default=settings.decomposition_provider if settings.decomposition_provider in {"groq", "openai"} else "groq",
+        help="Live vision provider to benchmark",
+    )
+    parser.add_argument(
         "--output",
         type=Path,
         default=Path("artifacts/vision-smoke-report.json"),
         help="JSON report path",
     )
     args = parser.parse_args()
-    return run(args.images_dir, args.output)
+    return run(args.images_dir, args.output, args.provider)
 
 
 if __name__ == "__main__":
