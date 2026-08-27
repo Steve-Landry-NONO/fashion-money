@@ -3,7 +3,7 @@ from sqlalchemy.orm import Session
 
 from app.capture import service
 from app.capture.providers import get_decomposition_provider
-from app.capture.schemas import CaptureIn, CaptureOut, LookOut, PieceOut
+from app.capture.schemas import CaptureIn, CaptureOut, LookOut, OutfitOut, PieceOut
 from app.capture.storage import ALLOWED_IMAGE_TYPES, get_image_storage
 from app.config import settings
 from app.db import get_session
@@ -50,28 +50,58 @@ async def upload_capture(
     return CaptureOut(capture_id=capture.id, look_id=look.id, status=capture.status)
 
 
+def _piece_out(piece, match=None) -> PieceOut:
+    return PieceOut(
+        id=piece.id,
+        category_raw=piece.category_raw,
+        category=piece.category,
+        color=piece.color,
+        cut=piece.cut,
+        material=piece.material,
+        swatch=piece.swatch,
+        confidence=piece.confidence,
+        owned_pct=match.owned_pct if match else 0,
+        is_owned=match.is_owned if match else False,
+        match_reason=match.reason if match else None,
+    )
+
+
 @router.get("/looks/{look_id}", response_model=LookOut)
 def get_look(look_id: str, user: User = Depends(get_current_user), session: Session = Depends(get_session)) -> LookOut:
     try:
-        look, pieces, matches = service.get_look_for_user(session, user.id, look_id)
+        look, outfits, all_pieces, matches = service.get_look_for_user(session, user.id, look_id)
     except ValueError:
         raise HTTPException(status_code=404, detail="look not found") from None
-    by_piece = {m.look_piece_id: m for m in matches}
-    out = []
-    for p in pieces:
-        m = by_piece[p.id]
-        out.append(
-            PieceOut(
-                id=p.id,
-                category=p.category,
-                color=p.color,
-                cut=p.cut,
-                material=p.material,
-                swatch=p.swatch,
-                owned_pct=m.owned_pct,
-                is_owned=m.is_owned,
-                match_reason=m.reason,
+
+    by_piece = {match.look_piece_id: match for match in matches}
+    representative_ids = {outfit.id for outfit in outfits if outfit.is_representative}
+    representative_pieces = [piece for piece in all_pieces if piece.outfit_id in representative_ids]
+    if not representative_ids:
+        representative_pieces = all_pieces
+
+    pieces_out = [_piece_out(piece, by_piece.get(piece.id)) for piece in representative_pieces]
+    score = round(sum(1 for piece in pieces_out if piece.is_owned) / len(pieces_out) * 100) if pieces_out else 0
+
+    outfit_outputs = []
+    for outfit in outfits:
+        outfit_pieces = [piece for piece in all_pieces if piece.outfit_id == outfit.id]
+        outfit_outputs.append(
+            OutfitOut(
+                id=outfit.id,
+                position=outfit.position,
+                style=outfit.style,
+                is_representative=outfit.is_representative,
+                pieces=[_piece_out(piece, by_piece.get(piece.id)) for piece in outfit_pieces],
             )
         )
-    score = round(sum(1 for p in out if p.is_owned) / len(out) * 100) if out else 0
-    return LookOut(id=look.id, style=look.style, pieces=out, score_look=score)
+
+    return LookOut(
+        id=look.id,
+        style=look.style,
+        image_type=look.image_type,
+        dominant_palette=look.dominant_palette,
+        representative_outfit_index=look.representative_outfit_index,
+        outfits=outfit_outputs,
+        pieces=pieces_out,
+        score_look=score,
+    )

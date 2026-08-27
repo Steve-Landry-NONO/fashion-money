@@ -1,0 +1,19 @@
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.venv/
+
+# Node / Expo
+node_modules/
+.expo/
+
+# Local secrets
+.env
+backend/.env
+
+# Local smoke-test inputs / outputs
+backend/smoke_inputs/
+backend/artifacts/

@@ -15,11 +15,13 @@ class Settings(BaseSettings):
     s3_region: str = "us-east-1"
     max_image_bytes: int = 10 * 1024 * 1024
 
-    # Vision is provider-swappable. Tests/dev default to the deterministic mock;
-    # set DECOMPOSITION_PROVIDER=openai + OPENAI_API_KEY for real analysis.
+    # Vision is provider-swappable. Tests/dev default to the deterministic mock.
     decomposition_provider: str = "mock"
     openai_api_key: str | None = None
-    vision_model: str = "gpt-5.6-luna"
+    groq_api_key: str | None = None
+    groq_base_url: str = "https://api.groq.com/openai/v1"
+    # Validated Groq baseline from the local 4-image smoke benchmark.
+    vision_model: str = "qwen/qwen3.8-27b"
 
     # Decision Engine config (externalised — parameters to learn, not to debate)
     tight_threshold_abs: float = 15.0

@@ -4,7 +4,8 @@ from sqlalchemy.orm import Session
 
 from app.analytics import emitter
 from app.analytics.context import context_for_capture
-from app.capture.models import Capture, Look, LookPiece
+from app.capture.models import Capture, Look, LookOutfit, LookPiece
+from app.capture.service import pieces_for_outfit
 from app.catalog.models import Option
 from app.catalog.providers import get_product_search_provider
 from app.catalog.schemas import OptionOut, OptionsOut
@@ -35,6 +36,7 @@ def _capture_for_piece(session: Session, piece: LookPiece) -> Capture | None:
 @router.get("/looks/{look_id}/gaps")
 def get_gaps(
     look_id: str,
+    outfit_id: str | None = None,
     user: User = Depends(get_current_user),
     session: Session = Depends(get_session),
 ) -> dict:
@@ -42,7 +44,15 @@ def get_gaps(
     capture = session.get(Capture, look.capture_id) if look else None
     if capture is None or capture.user_id != user.id:
         raise HTTPException(status_code=404, detail="look not found")
-    pieces = list(session.scalars(select(LookPiece).where(LookPiece.look_id == look_id)).all())
+
+    outfits = list(
+        session.scalars(select(LookOutfit).where(LookOutfit.look_id == look_id).order_by(LookOutfit.position)).all()
+    )
+    all_pieces = list(session.scalars(select(LookPiece).where(LookPiece.look_id == look_id)).all())
+    if outfit_id is not None and outfit_id not in {outfit.id for outfit in outfits}:
+        raise HTTPException(status_code=404, detail="outfit not found")
+    pieces = pieces_for_outfit(outfits, all_pieces, outfit_id)
+
     ids = [p.id for p in pieces]
     matches = list(session.scalars(select(Match).where(Match.look_piece_id.in_(ids))).all()) if ids else []
     by_piece = {m.look_piece_id: m for m in matches}
