@@ -6,7 +6,9 @@ Usage from backend/:
     python scripts/product_search_smoke_test.py --output artifacts/product-search-smoke.json
 
 The corpus mirrors representative normalized pieces produced by the Qwen 3.8
-vision benchmark. Live calls are intentionally excluded from CI.
+vision benchmark. Live calls are intentionally excluded from CI. For Shopify,
+the harness performs tools/list before any coverage measurement so the real MCP
+schema is captured before we trust the experimental request shape.
 """
 
 from __future__ import annotations
@@ -21,7 +23,11 @@ from pathlib import Path
 from typing import Any
 
 from app.capture.models import LookPiece
-from app.catalog.providers import SearchContext, get_product_search_provider
+from app.catalog.providers import (
+    SearchContext,
+    ShopifyGlobalCatalogProvider,
+    get_product_search_provider,
+)
 
 CORPUS = [
     ("trousers", "beige", "wide leg", "smart casual", ["beige", "navy"]),
@@ -35,7 +41,14 @@ CORPUS = [
 ]
 
 
-def _context(category: str, color: str, cut: str, style: str, palette: list[str], budget: float) -> SearchContext:
+def _context(
+    category: str,
+    color: str,
+    cut: str,
+    style: str,
+    palette: list[str],
+    budget: float,
+) -> SearchContext:
     piece = LookPiece(
         look_id="smoke-look",
         outfit_id="smoke-outfit",
@@ -64,8 +77,31 @@ def _candidate_json(candidate) -> dict[str, Any]:
     return body
 
 
-def run(output: Path, budget: float, limit: int, verify: bool) -> int:
+def run(output: Path, budget: float, limit: int, verify: bool, skip_discovery: bool) -> int:
     provider = get_product_search_provider()
+    discovery: dict[str, Any] | None = None
+    if isinstance(provider, ShopifyGlobalCatalogProvider) and not skip_discovery:
+        try:
+            discovery = provider.tools_list()
+            print("MCP tools/list succeeded; schema captured in report")
+        except Exception as exc:
+            report = {
+                "generated_at": datetime.now(UTC).isoformat(),
+                "provider": type(provider).__name__,
+                "budget": budget,
+                "protocol_discovery": {
+                    "error_type": type(exc).__name__,
+                    "message": str(exc),
+                },
+                "results": [],
+                "summary": {"queries_attempted": 0, "queries_succeeded": 0},
+            }
+            output.parent.mkdir(parents=True, exist_ok=True)
+            output.write_text(json.dumps(report, indent=2, ensure_ascii=False), encoding="utf-8")
+            print(f"MCP tools/list failed: {type(exc).__name__} - {exc}")
+            print(f"Report written to {output}")
+            return 2
+
     rows: list[dict[str, Any]] = []
     search_latencies: list[float] = []
     verify_latencies: list[float] = []
@@ -92,7 +128,11 @@ def run(output: Path, budget: float, limit: int, verify: bool) -> int:
                 verify_latencies.append(verify_ms)
                 row["verify_ms"] = round(verify_ms, 1)
                 row["verified"] = _candidate_json(verified) if verified else None
-                row["price_delta"] = round(verified.price - candidates[0].price, 2) if verified else None
+                row["price_delta"] = (
+                    round(verified.price - candidates[0].price, 2)
+                    if verified
+                    else None
+                )
             rows.append(row)
             print(f"{category}/{color}: {len(candidates)} candidates in {search_ms:.0f} ms")
         except Exception as exc:  # live harness must continue per query
@@ -114,7 +154,7 @@ def run(output: Path, budget: float, limit: int, verify: bool) -> int:
         else 0
     )
     availability_ratio = (
-        sum(bool(candidate.get("availability")) for candidate in candidates_flat) / len(candidates_flat)
+        sum(candidate.get("is_available") is True for candidate in candidates_flat) / len(candidates_flat)
         if candidates_flat
         else 0
     )
@@ -123,6 +163,7 @@ def run(output: Path, budget: float, limit: int, verify: bool) -> int:
         "generated_at": datetime.now(UTC).isoformat(),
         "provider": type(provider).__name__,
         "budget": budget,
+        "protocol_discovery": discovery,
         "results": rows,
         "summary": {
             "queries_attempted": len(rows),
@@ -155,8 +196,9 @@ def main() -> int:
     parser.add_argument("--budget", type=float, default=100.0)
     parser.add_argument("--limit", type=int, default=5)
     parser.add_argument("--verify", action="store_true")
+    parser.add_argument("--skip-discovery", action="store_true")
     args = parser.parse_args()
-    return run(args.output, args.budget, args.limit, args.verify)
+    return run(args.output, args.budget, args.limit, args.verify, args.skip_discovery)
 
 
 if __name__ == "__main__":
