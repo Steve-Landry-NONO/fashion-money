@@ -14,19 +14,33 @@ export type Capture = {
 
 export type LookPiece = {
   id: string;
+  category_raw: string | null;
   category: string;
   color: string | null;
   cut: string | null;
   material: string | null;
   swatch: string | null;
+  confidence: number | null;
   owned_pct: number;
   is_owned: boolean;
   match_reason: string | null;
 };
 
+export type Outfit = {
+  id: string;
+  position: number;
+  style: string | null;
+  is_representative: boolean;
+  pieces: LookPiece[];
+};
+
 export type Look = {
   id: string;
   style: string | null;
+  image_type: "single_outfit" | "collage";
+  dominant_palette: string[];
+  representative_outfit_index: number;
+  outfits: Outfit[];
   pieces: LookPiece[];
   score_look: number;
 };
@@ -96,7 +110,17 @@ export const api = {
   wallet: (baseUrl: string) => request<Wallet>(baseUrl, "/wallet"),
   createCapture: uploadCapture,
   look: (baseUrl: string, lookId: string) => request<Look>(baseUrl, `/looks/${lookId}`),
-  gaps: (baseUrl: string, lookId: string) => request<{missing: string[]}>(baseUrl, `/looks/${lookId}/gaps`),
+  selectOutfit: (baseUrl: string, lookId: string, outfitId: string) =>
+    request<{look_id: string; outfit_id: string; representative_outfit_index: number}>(
+      baseUrl,
+      `/looks/${lookId}/selection`,
+      {method: "POST", body: JSON.stringify({outfit_id: outfitId})},
+    ),
+  gaps: (baseUrl: string, lookId: string, outfitId?: string) =>
+    request<{missing: string[]}>(
+      baseUrl,
+      `/looks/${lookId}/gaps${outfitId ? `?outfit_id=${encodeURIComponent(outfitId)}` : ""}`,
+    ),
   options: (baseUrl: string, pieceId: string) =>
     request<{options: Option[]}>(baseUrl, `/gaps/${pieceId}/options`),
   evaluate: (baseUrl: string, optionId: string) =>
