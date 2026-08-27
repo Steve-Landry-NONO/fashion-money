@@ -33,6 +33,16 @@ class CaptureOut(BaseModel):
     status: str
 
 
+class OutfitSelectionIn(BaseModel):
+    outfit_id: str
+
+
+class OutfitSelectionOut(BaseModel):
+    look_id: str
+    outfit_id: str
+    representative_outfit_index: int
+
+
 class LookOut(BaseModel):
     id: str
     style: str | None
