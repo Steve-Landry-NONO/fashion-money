@@ -1,10 +1,9 @@
 import base64
-import json
 from dataclasses import dataclass
 from typing import Any, Protocol
 
 from openai import BadRequestError, OpenAI
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ValidationError
 
 from app.capture.storage import ImageStorage, get_image_storage
 from app.config import settings
@@ -143,65 +142,21 @@ def _image_data_url(storage: ImageStorage, image_ref: str | None) -> str:
 
 
 VISION_PROMPT = (
-    "Analyze this fashion inspiration image conservatively. Detect every distinct visible person/look before "
-    "describing garments. If multiple people or separate look panels are visible, image_type MUST be collage and "
-    "outfits MUST contain exactly one entry per distinct visible person/look. Never merge two people, never split "
-    "one person into multiple outfits, and never create an outfit for a garment detail that belongs to another "
-    "person. Order outfits left-to-right, then top-to-bottom. Include only garments/accessories visibly worn by "
-    "that person. Return JSON only with exactly these top-level keys: image_type, style, dominant_palette, outfits, "
-    "representative_outfit_index. image_type is single_outfit or collage. style is a short generic style label. "
-    "dominant_palette is an array of short color names. Each outfit has exactly style and pieces. Each piece has "
-    "exactly category, color, cut, material, swatch, confidence. category is a generic lowercase English garment "
-    "category with no brand. color may be null only if unclear. cut, material and swatch MUST be null when the "
-    "pixels do not support a reliable inference; never infer fabric merely from garment type. confidence is a "
-    "number from 0 to 1 for the visible attribute extraction. representative_outfit_index is 0 unless one outfit "
-    "is clearly dominant. Do not add markdown, explanations, comments, trailing text, or additional JSON keys."
+    "Analyze this fashion image and output ONE valid JSON object only. First count distinct visible people/looks. "
+    "If there is more than one, image_type is collage and create exactly one outfit per person/look. Never merge "
+    "people and never split one person into multiple outfits. Order outfits left-to-right then top-to-bottom. "
+    "Required shape: image_type, style, dominant_palette, outfits, representative_outfit_index. Each outfit has "
+    "style and pieces. Each piece has category, color, cut, material, swatch, confidence. Use generic lowercase "
+    "English garment categories. Use null when cut, material, or swatch is uncertain; do not guess fabric. "
+    "confidence is 0 to 1. representative_outfit_index defaults to 0. No markdown or extra text."
 )
 
-GROQ_JSON_SCHEMA: dict[str, Any] = {
-    "name": "fashion_vision_look",
-    "strict": True,
-    "schema": {
-        "type": "object",
-        "additionalProperties": False,
-        "properties": {
-            "image_type": {"type": "string", "enum": ["single_outfit", "collage"]},
-            "style": {"type": "string"},
-            "dominant_palette": {"type": "array", "items": {"type": "string"}},
-            "outfits": {
-                "type": "array",
-                "minItems": 1,
-                "items": {
-                    "type": "object",
-                    "additionalProperties": False,
-                    "properties": {
-                        "style": {"type": "string"},
-                        "pieces": {
-                            "type": "array",
-                            "minItems": 1,
-                            "items": {
-                                "type": "object",
-                                "additionalProperties": False,
-                                "properties": {
-                                    "category": {"type": "string"},
-                                    "color": {"type": ["string", "null"]},
-                                    "cut": {"type": ["string", "null"]},
-                                    "material": {"type": ["string", "null"]},
-                                    "swatch": {"type": ["string", "null"]},
-                                    "confidence": {"type": ["number", "null"], "minimum": 0, "maximum": 1},
-                                },
-                                "required": ["category", "color", "cut", "material", "swatch", "confidence"],
-                            },
-                        },
-                    },
-                    "required": ["style", "pieces"],
-                },
-            },
-            "representative_outfit_index": {"type": "integer", "minimum": 0},
-        },
-        "required": ["image_type", "style", "dominant_palette", "outfits", "representative_outfit_index"],
-    },
-}
+REPAIR_PROMPT = (
+    "Return only a compact valid JSON object for the fashion image. Required keys: image_type, style, "
+    "dominant_palette, outfits, representative_outfit_index. For collages: exactly one outfit per visible person, "
+    "no merging and no splitting. Each outfit: style, pieces. Each piece: category, color, cut, material, swatch, "
+    "confidence. Use null for uncertain attributes. No markdown."
+)
 
 
 class OpenAIDecompositionProvider:
@@ -240,13 +195,23 @@ class GroqDecompositionProvider:
         self.storage = storage or get_image_storage()
         self.client = client or OpenAI(api_key=settings.groq_api_key, base_url=settings.groq_base_url)
 
-    def _request(self, messages: list[Any], response_format: dict[str, Any]) -> DecomposedLook:
+    def _request(self, data_url: str, prompt: str) -> DecomposedLook:
+        messages: list[Any] = [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": prompt},
+                    {"type": "image_url", "image_url": {"url": data_url}},
+                ],
+            }
+        ]
         completion = self.client.chat.completions.create(
             model=settings.vision_model,
             messages=messages,
-            response_format=response_format,
+            response_format={"type": "json_object"},
             temperature=0,
             max_completion_tokens=4096,
+            extra_body={"reasoning_format": "hidden"},
         )
         content = completion.choices[0].message.content
         if not content:
@@ -255,33 +220,20 @@ class GroqDecompositionProvider:
 
     def decompose(self, image_ref: str | None = None) -> DecomposedLook:
         data_url = _image_data_url(self.storage, image_ref)
-        messages: list[Any] = [
-            {
-                "role": "user",
-                "content": [
-                    {"type": "text", "text": VISION_PROMPT},
-                    {"type": "image_url", "image_url": {"url": data_url}},
-                ],
-            }
-        ]
-        formats: list[dict[str, Any]] = [
-            {"type": "json_schema", "json_schema": GROQ_JSON_SCHEMA},
-            {"type": "json_object"},
-            {"type": "json_object"},
-        ]
-        last_error: BadRequestError | None = None
-        for attempt, response_format in enumerate(formats):
+        last_error: Exception | None = None
+        prompts = (VISION_PROMPT, REPAIR_PROMPT, REPAIR_PROMPT)
+        for prompt in prompts:
             try:
-                return self._request(messages, response_format)
+                return self._request(data_url, prompt)
             except BadRequestError as exc:
                 body = exc.body if isinstance(exc.body, dict) else {}
                 error = body.get("error", {}) if isinstance(body, dict) else {}
                 code = error.get("code") if isinstance(error, dict) else None
-                if code not in {"json_validate_failed", "invalid_request_error"}:
+                if code != "json_validate_failed":
                     raise
                 last_error = exc
-                if attempt == 0:
-                    messages[0]["content"][0]["text"] = VISION_PROMPT + " Follow the JSON schema exactly."
+            except ValidationError as exc:
+                last_error = exc
         if last_error is not None:
             raise last_error
         raise RuntimeError("Groq vision provider failed without returning an error")
