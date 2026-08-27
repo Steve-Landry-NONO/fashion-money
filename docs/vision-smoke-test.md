@@ -15,18 +15,48 @@ Use 3 to 5 deliberately different fashion inspiration screenshots. Prefer divers
 
 Do not commit the screenshots. Put them locally in `backend/smoke_inputs/`.
 
-## Run
+## Run with Groq (current primary path)
 
-From `backend/`:
+Create `backend/.env` locally from `.env.example`, keep it out of Git, and set:
+
+```env
+DECOMPOSITION_PROVIDER=groq
+GROQ_API_KEY=your_local_key
+VISION_MODEL=qwen/qwen3.6-27b
+```
+
+Then, from `backend/`:
 
 ```bash
-export OPENAI_API_KEY="..."
-export VISION_MODEL="gpt-5.6-luna"
 python scripts/vision_smoke_test.py smoke_inputs \
+  --provider groq \
   --output artifacts/vision-smoke-report.json
 ```
 
-The harness intentionally reads local files through the same `OpenAIDecompositionProvider` used by the application, while bypassing MinIO so the test isolates Vision quality rather than storage availability.
+On PowerShell, the same command can be entered on one line:
+
+```powershell
+python scripts/vision_smoke_test.py smoke_inputs --provider groq --output artifacts/vision-smoke-report.json
+```
+
+The harness reads local image files through the same provider boundary used by the application while bypassing MinIO, so this test isolates Vision quality rather than storage availability.
+
+## Optional OpenAI benchmark later
+
+When OpenAI API access is available again, keep the same screenshots and run:
+
+```env
+DECOMPOSITION_PROVIDER=openai
+OPENAI_API_KEY=your_local_key
+VISION_MODEL=gpt-5.6-luna
+```
+
+```bash
+python scripts/vision_smoke_test.py smoke_inputs --provider openai \
+  --output artifacts/vision-smoke-report-openai.json
+```
+
+This makes the provider comparison fair because the image set, output contract, and review rubric stay identical.
 
 ## What to review manually
 
@@ -44,6 +74,7 @@ For every image, compare the source screenshot with the returned structure and s
 
 The JSON report contains:
 
+- provider and model
 - image count
 - min / max / average number of detected pieces
 - unique normalized categories
