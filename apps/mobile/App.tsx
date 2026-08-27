@@ -13,9 +13,9 @@ import {
   View,
 } from "react-native";
 
-import {api, Evaluation, Look, Option, Wallet} from "./src/api";
+import {api, Evaluation, Look, Option, Outfit, Wallet} from "./src/api";
 
-type Step = "onboarding" | "wallet" | "look" | "options" | "decision" | "confirmed";
+type Step = "onboarding" | "wallet" | "outfit" | "look" | "options" | "decision" | "confirmed";
 const money = (value: number) => `${value.toFixed(2).replace(".", ",")} €`;
 
 export default function App() {
@@ -83,8 +83,28 @@ export default function App() {
     }
     const result = await run(async () => {
       const created = await api.createCapture(baseUrl, imageUri);
-      const nextLook = await api.look(baseUrl, created.look_id);
-      const gaps = await api.gaps(baseUrl, created.look_id);
+      return api.look(baseUrl, created.look_id);
+    });
+    if (!result) return;
+    setLook(result);
+    if (result.image_type === "collage" && result.outfits.length > 1) {
+      setMissing([]);
+      setStep("outfit");
+      return;
+    }
+    const representative = result.outfits.find((outfit) => outfit.is_representative);
+    const gaps = await run(() => api.gaps(baseUrl, result.id, representative?.id));
+    if (!gaps) return;
+    setMissing(gaps.missing);
+    setStep("look");
+  }
+
+  async function chooseOutfit(outfit: Outfit) {
+    if (!look) return;
+    const result = await run(async () => {
+      await api.selectOutfit(baseUrl, look.id, outfit.id);
+      const nextLook = await api.look(baseUrl, look.id);
+      const gaps = await api.gaps(baseUrl, look.id, outfit.id);
       return {nextLook, gaps};
     });
     if (!result) return;
@@ -161,21 +181,41 @@ export default function App() {
           </>
         )}
 
+        {step === "outfit" && look && (
+          <Card>
+            <Text style={styles.eyebrow}>03 · QUEL LOOK VEUX-TU RECRÉER ?</Text>
+            {imageUri && <Image source={{uri: imageUri}} style={styles.thumb} />}
+            <Text style={styles.title}>{look.outfits.length} looks détectés</Text>
+            <Text style={styles.copy}>Choisis la silhouette qui t’intéresse. Le matching, les pièces manquantes et le budget seront calculés uniquement pour ce look.</Text>
+            {look.outfits.map((outfit) => (
+              <Pressable key={outfit.id} style={styles.outfitCard} onPress={() => chooseOutfit(outfit)}>
+                <View style={styles.outfitHeader}>
+                  <Text style={styles.outfitNumber}>LOOK {outfit.position + 1}</Text>
+                  <Text style={styles.muted}>{outfit.pieces.length} pièce(s)</Text>
+                </View>
+                <Text style={styles.rowTitle}>{outfit.style ?? "Style détecté"}</Text>
+                <Text style={styles.outfitPieces}>{outfit.pieces.map((piece) => piece.category).join(" · ")}</Text>
+              </Pressable>
+            ))}
+          </Card>
+        )}
+
         {step === "look" && look && (
           <Card>
-            <Text style={styles.eyebrow}>03 · CE QUE TU AS DÉJÀ</Text>
+            <Text style={styles.eyebrow}>04 · CE QUE TU AS DÉJÀ</Text>
             {imageUri && <Image source={{uri: imageUri}} style={styles.thumb} />}
             <Text style={styles.bigNumber}>{look.score_look}%</Text>
-            <Text style={styles.title}>{look.style ?? "Style détecté"}</Text>
+            <Text style={styles.title}>{look.outfits.find((outfit) => outfit.is_representative)?.style ?? look.style ?? "Style détecté"}</Text>
             <Text style={styles.copy}>{ownedCount === 0 ? "Penderie vide : on raisonne d’abord budget." : `${ownedCount} pièce(s) sur ${look.pieces.length} déjà couvertes.`}</Text>
             {look.pieces.map((piece) => <View key={piece.id} style={styles.row}><Text style={styles.rowTitle}>{piece.category}</Text><Text style={piece.is_owned ? styles.good : styles.muted}>{piece.is_owned ? "déjà possédé" : "manquant"}</Text></View>)}
+            {look.outfits.length > 1 && <SecondaryButton label="Choisir un autre look" onPress={() => setStep("outfit")} />}
             <PrimaryButton label={missing.length ? `Voir ${missing.length} pièce(s) à compléter` : "Tout est couvert"} onPress={loadOptions} disabled={!missing.length} />
           </Card>
         )}
 
         {step === "options" && (
           <Card>
-            <Text style={styles.eyebrow}>04 · OPTIONS</Text>
+            <Text style={styles.eyebrow}>05 · OPTIONS</Text>
             <Text style={styles.title}>Trois choix. Pas quarante-huit.</Text>
             {options.map((option) => <Pressable key={option.id} style={[styles.option, option.is_best && styles.optionBest]} onPress={() => decide(option)}><View><Text style={styles.rowTitle}>{option.merchant ?? "Marchand"}</Text><Text style={styles.muted}>Similarité {option.similarity ?? "—"}%</Text></View><View style={styles.right}><Text style={styles.optionPrice}>{money(option.price)}</Text>{option.is_best && <Text style={styles.best}>MEILLEUR CHOIX</Text>}</View></Pressable>)}
           </Card>
@@ -185,7 +225,7 @@ export default function App() {
           <>
             <WalletCard wallet={wallet ?? {period: "", base: 0, rollover_in: 0, spent: 0, available: evaluation.available}} />
             <Card>
-              <Text style={styles.eyebrow}>05 · DÉCISION</Text>
+              <Text style={styles.eyebrow}>06 · DÉCISION</Text>
               <Text style={styles.title}>Ton solde après achat</Text>
               <View style={styles.balanceFlow}><Text style={styles.balance}>{money(evaluation.available)}</Text><Text>→</Text><Text style={styles.balance}>{money(evaluation.available_after)}</Text></View>
               <Verdict verdict={evaluation.verdict} />
@@ -195,7 +235,7 @@ export default function App() {
         )}
 
         {step === "confirmed" && wallet && (
-          <><WalletCard wallet={wallet} /><Card><Text style={styles.eyebrow}>06 · BOUCLE REFERMÉE</Text><Text style={styles.title}>Budget débité. Penderie enrichie.</Text><Text style={styles.copy}>Choisis maintenant une autre inspiration : la prochaine analyse partira d’une garde-robe déjà enrichie.</Text><PrimaryButton label="Importer une nouvelle capture" onPress={() => setStep("wallet")} /></Card></>
+          <><WalletCard wallet={wallet} /><Card><Text style={styles.eyebrow}>07 · BOUCLE REFERMÉE</Text><Text style={styles.title}>Budget débité. Penderie enrichie.</Text><Text style={styles.copy}>Choisis maintenant une autre inspiration : la prochaine analyse partira d’une garde-robe déjà enrichie.</Text><PrimaryButton label="Importer une nouvelle capture" onPress={() => setStep("wallet")} /></Card></>
         )}
 
         {busy && <ActivityIndicator size="large" />}
@@ -220,6 +260,7 @@ const styles = StyleSheet.create({
   preview: {width: "100%", aspectRatio: 0.8, borderRadius: 18, backgroundColor: "#E9E5DD"}, thumb: {width: "100%", height: 180, borderRadius: 16, backgroundColor: "#E9E5DD"}, placeholder: {height: 180, borderRadius: 18, backgroundColor: "#ECE8E0", alignItems: "center", justifyContent: "center"},
   walletAmount: {fontSize: 46, fontWeight: "900", fontVariant: ["tabular-nums"]}, bigNumber: {fontSize: 56, fontWeight: "900"}, muted: {fontSize: 13, color: "#7B756D"}, good: {fontSize: 13, color: "#2F6B47", fontWeight: "700"},
   row: {flexDirection: "row", justifyContent: "space-between", paddingVertical: 10, borderBottomWidth: StyleSheet.hairlineWidth, borderColor: "#DED9D0"}, rowTitle: {fontSize: 15, fontWeight: "700", textTransform: "capitalize"},
+  outfitCard: {padding: 16, borderWidth: 1, borderColor: "#D8D2C8", borderRadius: 18, gap: 8}, outfitHeader: {flexDirection: "row", justifyContent: "space-between", alignItems: "center"}, outfitNumber: {fontSize: 11, fontWeight: "900", letterSpacing: 1.2}, outfitPieces: {fontSize: 13, lineHeight: 19, color: "#625D55", textTransform: "capitalize"},
   option: {flexDirection: "row", justifyContent: "space-between", alignItems: "center", padding: 16, borderWidth: 1, borderColor: "#DED9D0", borderRadius: 16}, optionBest: {borderWidth: 2, borderColor: "#171717"}, right: {alignItems: "flex-end"}, optionPrice: {fontSize: 21, fontWeight: "800"}, best: {fontSize: 9, fontWeight: "900"},
   balanceFlow: {flexDirection: "row", alignItems: "center", justifyContent: "space-between"}, balance: {fontSize: 28, fontWeight: "900", fontVariant: ["tabular-nums"]}, verdict: {fontSize: 13, fontWeight: "900", paddingVertical: 8}, verdictOver: {color: "#A13A2F"}, error: {backgroundColor: "#FFE4E0", color: "#8A241C", padding: 14, borderRadius: 14},
 });
