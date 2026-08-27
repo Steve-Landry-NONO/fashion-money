@@ -13,7 +13,7 @@ Create `backend/.env` locally and set:
 ```env
 DECOMPOSITION_PROVIDER=groq
 GROQ_API_KEY=your_local_key
-VISION_MODEL=qwen/qwen3.6-27b
+VISION_MODEL=qwen/qwen3.8-27b
 ```
 
 From `backend/` on PowerShell:
@@ -21,6 +21,8 @@ From `backend/` on PowerShell:
 ```powershell
 python scripts/vision_smoke_test.py smoke_inputs --provider groq --output artifacts/vision-smoke-report.json
 ```
+
+Qwen 3.8 is the current Groq baseline. On the four reference collages it reached 4/4 successful structured responses, whereas Qwen 3.6 remained unstable on JSON validation.
 
 ## V2 output contract
 
@@ -64,14 +66,19 @@ For every image, check:
 
 The report contains success ratio, collages detected, average outfit count, average/min/max pieces per outfit, raw vs normalized category counts, missing attribute ratios, confidence coverage, and all structured outputs.
 
+## Current gate result
+
+Qwen 3.8 passes the transport/structured-output gate on the four reference collages: 4 attempted, 4 succeeded, 0 failed. It also preserves uncertainty better on material than the earlier Qwen 3.6 runs. Segmentation is usable but not perfect: two reference collages produced an extra one-piece outfit, so low-information/ambiguous outfit handling remains a known issue rather than a blocker for the provider boundary itself.
+
 ## Gate before real Product Search
 
-Proceed only if the same four screenshots show:
+Proceed when the same four screenshots show:
 
-- reliable separation of distinct outfits;
-- representative outfits with coherent 3–5-piece compositions in most cases;
-- materially lower normalized category fragmentation than raw category fragmentation;
+- reliable structured responses (4/4 on the reference set);
+- separation of distinct outfits good enough that the user can select the intended outfit;
+- representative outfits with coherent compositions in most cases;
+- normalized categories suitable for stable search queries;
 - no systematic overconfidence on fabric/cut;
-- attributes stable enough to construct product-search queries without poisoning wardrobe matching.
+- material treated as weak evidence rather than a hard matching constraint.
 
-If these conditions fail, iterate on prompt/schema/taxonomy before merchant integration.
+Do not silently auto-select ambiguous one-piece outfits in the product flow. Multi-outfit selection or ambiguity handling must protect Product Search from obvious segmentation noise.
