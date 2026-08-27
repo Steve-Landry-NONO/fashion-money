@@ -7,12 +7,13 @@ from app.analytics.context import context_for_capture
 from app.capture.models import Capture, Look, LookOutfit, LookPiece
 from app.capture.service import pieces_for_outfit
 from app.catalog.models import Option
-from app.catalog.providers import get_product_search_provider
+from app.catalog.providers import SearchContext, get_product_search_provider
 from app.catalog.schemas import OptionOut, OptionsOut
 from app.db import get_session
 from app.identity.deps import get_current_user
 from app.identity.models import User
 from app.matching.models import Match
+from app.wallet import service as wallet_service
 
 router = APIRouter(tags=["catalog"])
 
@@ -31,6 +32,24 @@ def _owned_piece_for_user(session: Session, user_id: str, piece_id: str) -> Look
 def _capture_for_piece(session: Session, piece: LookPiece) -> Capture | None:
     look = session.get(Look, piece.look_id)
     return session.get(Capture, look.capture_id) if look else None
+
+
+def _search_context(session: Session, user: User, piece: LookPiece) -> SearchContext:
+    look = session.get(Look, piece.look_id)
+    outfit = session.get(LookOutfit, piece.outfit_id) if piece.outfit_id else None
+    try:
+        budget_available = float(wallet_service.get_wallet(session, user.id)["available"])
+    except ValueError:
+        budget_available = None
+    ship_to = "FR" if user.region in {"EU", "FR"} else user.region
+    return SearchContext(
+        piece=piece,
+        outfit_style=outfit.style if outfit else None,
+        dominant_palette=list(look.dominant_palette or []) if look else [],
+        budget_available=budget_available,
+        ship_to=ship_to,
+        currency="EUR",
+    )
 
 
 @router.get("/looks/{look_id}/gaps")
@@ -80,22 +99,22 @@ def get_options(
     except ValueError:
         raise HTTPException(status_code=404, detail="piece not found") from None
     provider = get_product_search_provider()
-    candidates = provider.search(piece, ship_to=user.region)
+    candidates = provider.search(_search_context(session, user, piece), limit=5)
     session.execute(delete(Option).where(Option.look_piece_id == piece_id))
     rows: list[Option] = []
-    for c in candidates:
+    for candidate in candidates:
         row = Option(
             look_piece_id=piece_id,
-            price=c.price,
-            merchant=c.merchant,
-            affiliate_url=c.affiliate_url,
-            similarity=c.similarity,
-            purchase_score=c.purchase_score,
+            price=candidate.price,
+            merchant=candidate.merchant,
+            affiliate_url=candidate.product_url,
+            similarity=candidate.similarity,
+            purchase_score=candidate.purchase_score,
         )
         session.add(row)
         rows.append(row)
     session.commit()
-    best_id = max(rows, key=lambda r: float(r.purchase_score or 0)).id if rows else None
+    best_id = max(rows, key=lambda row: float(row.purchase_score or 0)).id if rows else None
     capture = _capture_for_piece(session, piece)
     ctx = context_for_capture(session, user.id, capture) if capture else None
     emitter.emit(
@@ -109,14 +128,14 @@ def get_options(
     return OptionsOut(
         options=[
             OptionOut(
-                id=r.id,
-                price=float(r.price),
-                merchant=r.merchant,
-                affiliate_url=r.affiliate_url,
-                similarity=r.similarity,
-                purchase_score=float(r.purchase_score) if r.purchase_score is not None else None,
-                is_best=r.id == best_id,
+                id=row.id,
+                price=float(row.price),
+                merchant=row.merchant,
+                affiliate_url=row.affiliate_url,
+                similarity=row.similarity,
+                purchase_score=float(row.purchase_score) if row.purchase_score is not None else None,
+                is_best=row.id == best_id,
             )
-            for r in rows
+            for row in rows
         ]
     )
