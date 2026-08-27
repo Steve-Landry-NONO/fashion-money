@@ -23,6 +23,30 @@ def pieces_for_outfit(
     return [piece for piece in all_pieces if piece.outfit_id in representative_ids]
 
 
+def select_outfit(session: Session, user_id: str, look_id: str, outfit_id: str) -> LookOutfit:
+    """Make one persisted outfit the active/representative look for the user."""
+    look = session.get(Look, look_id)
+    if look is None:
+        raise ValueError("look not found")
+    capture = session.get(Capture, look.capture_id)
+    if capture is None or capture.user_id != user_id:
+        raise ValueError("look not found")
+
+    outfits = list(
+        session.scalars(select(LookOutfit).where(LookOutfit.look_id == look_id).order_by(LookOutfit.position)).all()
+    )
+    selected = next((outfit for outfit in outfits if outfit.id == outfit_id), None)
+    if selected is None:
+        raise ValueError("outfit not found")
+
+    for outfit in outfits:
+        outfit.is_representative = outfit.id == selected.id
+    look.representative_outfit_index = selected.position
+    session.commit()
+    session.refresh(selected)
+    return selected
+
+
 def create_capture(
     session: Session,
     user_id: str,
