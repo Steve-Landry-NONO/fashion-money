@@ -9,6 +9,20 @@ from app.matching.models import Match, WardrobeItem
 from app.matching.service import compute_match
 
 
+def pieces_for_outfit(
+    outfits: list[LookOutfit],
+    all_pieces: list[LookPiece],
+    outfit_id: str | None = None,
+) -> list[LookPiece]:
+    """Return pieces for the selected outfit, defaulting to the representative one."""
+    if outfit_id is not None:
+        return [piece for piece in all_pieces if piece.outfit_id == outfit_id]
+    representative_ids = {outfit.id for outfit in outfits if outfit.is_representative}
+    if not representative_ids:
+        return all_pieces
+    return [piece for piece in all_pieces if piece.outfit_id in representative_ids]
+
+
 def create_capture(
     session: Session,
     user_id: str,
@@ -103,21 +117,15 @@ def get_look_for_user(
         session.scalars(select(LookOutfit).where(LookOutfit.look_id == look_id).order_by(LookOutfit.position)).all()
     )
     all_pieces = list(session.scalars(select(LookPiece).where(LookPiece.look_id == look_id)).all())
-
-    representative_ids = {outfit.id for outfit in outfits if outfit.is_representative}
-    if representative_ids:
-        pieces = [piece for piece in all_pieces if piece.outfit_id in representative_ids]
-    else:
-        # Backward-compatible fallback for rows created before the collage-aware migration.
-        pieces = all_pieces
+    pieces = pieces_for_outfit(outfits, all_pieces)
 
     wardrobe = list(session.scalars(select(WardrobeItem).where(WardrobeItem.user_id == user_id)).all())
-    piece_ids = [piece.id for piece in pieces]
+    piece_ids = [piece.id for piece in all_pieces]
     if piece_ids:
         session.execute(delete(Match).where(Match.look_piece_id.in_(piece_ids)))
 
     matches: list[Match] = []
-    for piece in pieces:
+    for piece in all_pieces:
         result = compute_match(piece, wardrobe)
         match = Match(
             look_piece_id=piece.id,
@@ -130,7 +138,8 @@ def get_look_for_user(
         matches.append(match)
     session.commit()
 
-    owned = sum(1 for match in matches if match.is_owned)
+    scored_ids = {piece.id for piece in pieces}
+    owned = sum(1 for match in matches if match.look_piece_id in scored_ids and match.is_owned)
     score = round(owned / len(pieces) * 100) if pieces else 0
     ctx = context_for_capture(session, user_id, capture)
     emitter.emit(
