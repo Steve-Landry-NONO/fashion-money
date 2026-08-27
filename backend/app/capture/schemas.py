@@ -1,4 +1,4 @@
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 class CaptureIn(BaseModel):
@@ -37,9 +37,9 @@ class LookOut(BaseModel):
     id: str
     style: str | None
     image_type: str = "single_outfit"
-    dominant_palette: list[str] = []
+    dominant_palette: list[str] = Field(default_factory=list)
     representative_outfit_index: int = 0
-    outfits: list[OutfitOut] = []
+    outfits: list[OutfitOut] = Field(default_factory=list)
     # Kept for the current mobile client: these are only the representative outfit pieces.
     pieces: list[PieceOut]
     score_look: int
