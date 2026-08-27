@@ -162,12 +162,18 @@ class OpenAIDecompositionProvider:
 
     def decompose(self, image_ref: str | None = None) -> DecomposedLook:
         data_url = _image_data_url(self.storage, image_ref)
+        input_payload: Any = [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "input_text", "text": VISION_PROMPT},
+                    {"type": "input_image", "image_url": data_url},
+                ],
+            }
+        ]
         response = self.client.responses.parse(
             model=settings.vision_model,
-            input=[{"role": "user", "content": [
-                {"type": "input_text", "text": VISION_PROMPT},
-                {"type": "input_image", "image_url": data_url},
-            ]}],
+            input=input_payload,
             text_format=VisionLook,
         )
         parsed = response.output_parsed
@@ -185,10 +191,15 @@ class GroqDecompositionProvider:
 
     def decompose(self, image_ref: str | None = None) -> DecomposedLook:
         data_url = _image_data_url(self.storage, image_ref)
-        messages: list[Any] = [{"role": "user", "content": [
-            {"type": "text", "text": VISION_PROMPT},
-            {"type": "image_url", "image_url": {"url": data_url}},
-        ]}]
+        messages: list[Any] = [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": VISION_PROMPT},
+                    {"type": "image_url", "image_url": {"url": data_url}},
+                ],
+            }
+        ]
         last_error: BadRequestError | None = None
         for _ in range(2):
             try:
