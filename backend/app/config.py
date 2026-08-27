@@ -20,7 +20,8 @@ class Settings(BaseSettings):
     openai_api_key: str | None = None
     groq_api_key: str | None = None
     groq_base_url: str = "https://api.groq.com/openai/v1"
-    vision_model: str = "gpt-5.6-luna"
+    # Validated Groq baseline from the local 4-image smoke benchmark.
+    vision_model: str = "qwen/qwen3.8-27b"
 
     # Decision Engine config (externalised — parameters to learn, not to debate)
     tight_threshold_abs: float = 15.0
