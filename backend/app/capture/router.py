@@ -3,7 +3,15 @@ from sqlalchemy.orm import Session
 
 from app.capture import service
 from app.capture.providers import get_decomposition_provider
-from app.capture.schemas import CaptureIn, CaptureOut, LookOut, OutfitOut, PieceOut
+from app.capture.schemas import (
+    CaptureIn,
+    CaptureOut,
+    LookOut,
+    OutfitOut,
+    OutfitSelectionIn,
+    OutfitSelectionOut,
+    PieceOut,
+)
 from app.capture.storage import ALLOWED_IMAGE_TYPES, get_image_storage
 from app.config import settings
 from app.db import get_session
@@ -63,6 +71,25 @@ def _piece_out(piece, match=None) -> PieceOut:
         owned_pct=match.owned_pct if match else 0,
         is_owned=match.is_owned if match else False,
         match_reason=match.reason if match else None,
+    )
+
+
+@router.post("/looks/{look_id}/selection", response_model=OutfitSelectionOut)
+def select_outfit(
+    look_id: str,
+    body: OutfitSelectionIn,
+    user: User = Depends(get_current_user),
+    session: Session = Depends(get_session),
+) -> OutfitSelectionOut:
+    try:
+        outfit = service.select_outfit(session, user.id, look_id, body.outfit_id)
+    except ValueError as exc:
+        detail = "outfit not found" if str(exc) == "outfit not found" else "look not found"
+        raise HTTPException(status_code=404, detail=detail) from None
+    return OutfitSelectionOut(
+        look_id=look_id,
+        outfit_id=outfit.id,
+        representative_outfit_index=outfit.position,
     )
 
 
