@@ -39,7 +39,11 @@ class LookPiece(Base):
     __tablename__ = "look_pieces"
     id: Mapped[str] = mapped_column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
     look_id: Mapped[str] = mapped_column(ForeignKey("looks.id"), index=True)
-    outfit_id: Mapped[str | None] = mapped_column(ForeignKey("look_outfits.id", ondelete="CASCADE"), index=True, nullable=True)
+    outfit_id: Mapped[str | None] = mapped_column(
+        ForeignKey("look_outfits.id", ondelete="CASCADE"),
+        index=True,
+        nullable=True,
+    )
     category_raw: Mapped[str | None] = mapped_column(String, nullable=True)
     category: Mapped[str] = mapped_column(String)
     color: Mapped[str | None] = mapped_column(String, nullable=True)
