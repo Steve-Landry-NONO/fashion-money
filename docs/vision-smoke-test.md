@@ -1,23 +1,14 @@
 # Vision smoke test protocol
 
-Goal: validate the real `image -> style + pieces` boundary before replacing Product Search.
+Goal: validate the real `image -> outfits -> normalized pieces` boundary before replacing Product Search.
 
 ## Dataset
 
-Use 3 to 5 deliberately different fashion inspiration screenshots. Prefer diversity in:
+Use 3 to 5 deliberately different fashion inspiration screenshots. The current reference set contains four multi-look collages. Do not commit screenshots; keep them in `backend/smoke_inputs/`.
 
-- casual vs formal
-- light vs dark palette
-- layered vs simple outfits
-- trousers vs skirt/dress/shorts when relevant
-- sneakers vs leather shoes/boots
-- clear vs partially occluded garments
+## Run with Groq
 
-Do not commit the screenshots. Put them locally in `backend/smoke_inputs/`.
-
-## Run with Groq (current primary path)
-
-Create `backend/.env` locally from `.env.example`, keep it out of Git, and set:
+Create `backend/.env` locally and set:
 
 ```env
 DECOMPOSITION_PROVIDER=groq
@@ -25,72 +16,62 @@ GROQ_API_KEY=your_local_key
 VISION_MODEL=qwen/qwen3.6-27b
 ```
 
-Then, from `backend/`:
-
-```bash
-python scripts/vision_smoke_test.py smoke_inputs \
-  --provider groq \
-  --output artifacts/vision-smoke-report.json
-```
-
-On PowerShell, the same command can be entered on one line:
+From `backend/` on PowerShell:
 
 ```powershell
 python scripts/vision_smoke_test.py smoke_inputs --provider groq --output artifacts/vision-smoke-report.json
 ```
 
-The harness reads local image files through the same provider boundary used by the application while bypassing MinIO, so this test isolates Vision quality rather than storage availability.
+## V2 output contract
 
-## Optional OpenAI benchmark later
+Vision must return:
 
-When OpenAI API access is available again, keep the same screenshots and run:
+- `image_type`: `single_outfit` or `collage`
+- overall `style`
+- `dominant_palette[]`
+- `outfits[]`, one entry per distinct visible outfit/person
+- each outfit has `style` and `pieces[]`
+- each piece keeps `category_raw` plus a deterministic normalized `category`
+- optional `color`, `cut`, `material`, `swatch`, and `confidence`
+- `representative_outfit_index`
 
-```env
-DECOMPOSITION_PROVIDER=openai
-OPENAI_API_KEY=your_local_key
-VISION_MODEL=gpt-5.6-luna
-```
+The application remains backward-compatible for the current vertical slice: downstream matching consumes only the representative outfit through `DecomposedLook.pieces`. Multi-outfit selection is a later UI concern.
 
-```bash
-python scripts/vision_smoke_test.py smoke_inputs --provider openai \
-  --output artifacts/vision-smoke-report-openai.json
-```
+## Category normalization
 
-This makes the provider comparison fair because the image set, output contract, and review rubric stay identical.
+The provider layer normalizes obvious aliases before Matching/Product Search, for example:
 
-## What to review manually
+- `pants`, `slacks` -> `trousers`
+- `polo shirt` -> `polo`
+- `tee`, `t shirt` -> `t-shirt`
+- loafer variants -> `shoes`
 
-For every image, compare the source screenshot with the returned structure and score:
+The raw category is retained so normalization remains auditable.
 
-1. **Category stability** — are garments named consistently across images? Avoid synonyms that will fragment matching (`trousers` vs `pants`, `overshirt` vs `shirt jacket`) unless the distinction is useful.
-2. **Piece coverage** — are all visually important wearable pieces present? Are accessories/noise incorrectly included?
-3. **Color quality** — is the semantic color useful for matching? Is the swatch directionally correct?
-4. **Cut quality** — is the cut visible enough to justify the label? Track hallucinated specificity.
-5. **Material quality** — materials should be omitted when the image does not support them rather than confidently guessed.
-6. **Style quality** — short, reusable style description rather than brand or influencer commentary.
-7. **Matching consequence** — would the extracted attributes lead the current attribute matcher toward the right wardrobe item, or create false positives/false negatives?
+## What to review
 
-## Quantitative signals produced automatically
+For every image, check:
 
-The JSON report contains:
+1. **Collage segmentation** — garments from different people must never be merged into one outfit.
+2. **Pieces per outfit** — target roughly 3–5 material wardrobe pieces per visible look rather than 10+ merged pieces.
+3. **Category stability** — normalized categories should reduce synonym fragmentation.
+4. **Color quality** — semantic color should be useful for ranking.
+5. **Cut/material uncertainty** — null is preferable to unsupported specificity.
+6. **Confidence calibration** — low-confidence attributes should not dominate matching.
+7. **Matching consequence** — category has highest weight, then color, then cut; material must remain weak evidence in V1.
 
-- provider and model
-- image count
-- min / max / average number of detected pieces
-- unique normalized categories
-- missing-value ratios for color, cut, material and swatch
-- raw structured result per screenshot
+## Automatic report signals
 
-Missing values are not automatically bad. In particular, a high material-missing rate can be preferable to hallucinating material from a low-quality screenshot.
+The report contains success ratio, collages detected, average outfit count, average/min/max pieces per outfit, raw vs normalized category counts, missing attribute ratios, confidence coverage, and all structured outputs.
 
-## Decision gate before Product Search
+## Gate before real Product Search
 
-Proceed to real Product Search only if the smoke set suggests:
+Proceed only if the same four screenshots show:
 
-- core garment categories are stable enough to construct search queries;
-- important pieces are rarely omitted;
-- color is usable for ranking;
-- cut/material errors do not systematically poison matching;
-- output variability is understandable enough to normalize with a small taxonomy layer.
+- reliable separation of distinct outfits;
+- representative outfits with coherent 3–5-piece compositions in most cases;
+- materially lower normalized category fragmentation than raw category fragmentation;
+- no systematic overconfidence on fabric/cut;
+- attributes stable enough to construct product-search queries without poisoning wardrobe matching.
 
-If not, improve the decomposition prompt/schema and add category normalization before integrating merchant catalogs.
+If these conditions fail, iterate on prompt/schema/taxonomy before merchant integration.
